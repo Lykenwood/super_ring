@@ -23,6 +23,7 @@ import android.text.InputType;
 import android.view.View;
 import android.view.Gravity;
 import android.view.WindowInsetsController;
+import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -41,16 +42,22 @@ import java.util.function.Function;
 
 public class MainActivity extends Activity {
     private static final String DARK_MODE = "dark_mode";
+    private static final String ADAPTIVE_SOURCE = "adaptive_source";
     private boolean darkMode;
     private int currentPage;
+    private int currentEditorTab;
     private TextView overlayPermission, listenerPermission, accessibilityPermission;
     private TextView settingsTab, myTab;
     private ScrollView settingsPage, myPage, homePage;
+    private LinearLayout editorContainer;
+    private final LinearLayout[] editorSections = new LinearLayout[3];
+    private final TextView[] editorTabs = new TextView[3];
     private LinearLayout homeContent, nav;
     private String editingId;
     private boolean creating;
     private Spinner style, side;
     private LinearLayout sideRow, ringRow, screenRow, normalSizeRow;
+    private LinearLayout sideDirectionRow, ringDirectionRow, screenDirectionRow;
 
     @Override public void onCreate(Bundle state) {
         darkMode = OverlayController.prefs(this).getBoolean(DARK_MODE, false);
@@ -66,14 +73,36 @@ public class MainActivity extends Activity {
         LinearLayout shell = new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
         shell.setBackgroundColor(uiColor(0xfff4f7fb));
+        editorContainer = new LinearLayout(this);
+        editorContainer.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout editorHeader = new LinearLayout(this);
+        editorHeader.setOrientation(LinearLayout.VERTICAL);
+        editorHeader.setPadding(dp(16), dp(8), dp(16), dp(8));
+        editorContainer.addView(editorHeader);
+        button(editorHeader, "← 返回实例列表", this::finish);
+        label(editorHeader, creating ? "新建进度实例" : "编辑进度实例", 25, 0xff182438);
+        LinearLayout editorTabBar = new LinearLayout(this);
+        editorTabBar.setOrientation(LinearLayout.HORIZONTAL);
+        editorTabBar.setPadding(dp(8), dp(4), dp(8), dp(4));
+        editorContainer.addView(editorTabBar, new LinearLayout.LayoutParams(-1, dp(56)));
+        editorTabs[0] = tab(editorTabBar, "类型", () -> showEditorTab(0));
+        editorTabs[1] = tab(editorTabBar, "位置与大小", () -> showEditorTab(1));
+        editorTabs[2] = tab(editorTabBar, "颜色", () -> showEditorTab(2));
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         settingsPage = scroll;
         LinearLayout root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
-        int pad = dp(16); root.setPadding(pad, dp(18), pad, dp(28)); scroll.addView(root);
-        button(root, "← 返回实例列表", this::finish);
-        label(root, creating ? "新建进度实例" : "编辑进度实例", 28, 0xff182438);
-        LinearLayout identityCard = section(root, "实例");
+        int pad = dp(16); root.setPadding(pad, dp(10), pad, dp(28)); scroll.addView(root);
+        editorContainer.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        for (int i = 0; i < editorSections.length; i++) {
+            editorSections[i] = new LinearLayout(this);
+            editorSections[i].setOrientation(LinearLayout.VERTICAL);
+            root.addView(editorSections[i]);
+        }
+        LinearLayout typePage = editorSections[0];
+        LinearLayout geometryPage = editorSections[1];
+        LinearLayout colorPage = editorSections[2];
+        LinearLayout identityCard = section(typePage, "实例");
         EditText instanceName = new EditText(this);
         instanceName.setSingleLine(true);
         instanceName.setText(instancePrefs().getString(InstanceStore.NAME, "进度条"));
@@ -97,30 +126,36 @@ public class MainActivity extends Activity {
             OverlayController.refresh(this);
         });
         label(identityCard, "进度来源：自动选择最新的进度通知。后续可为每个实例单独指定来源。", 13, 0xff667184);
-        LinearLayout styleCard = section(root, "显示样式");
+        LinearLayout styleCard = section(typePage, "显示样式");
         style = spinner(styleCard, "样式", new String[]{"屏幕边缘进度条", "摄像头挖孔圆环", "环绕屏幕进度条"},
                 instancePrefs().getInt(OverlayController.STYLE, 0), OverlayController.STYLE);
-        sideRow = section(root, "边栏条设置");
+        sideDirectionRow = section(typePage, "边栏进度方向");
+        Spinner edgeDirection = spinner(sideDirectionRow, "进度方向", new String[]{"正向（横向向右、纵向向上）", "反向"},
+                instancePrefs().getInt(OverlayController.EDGE_DIRECTION, 0), OverlayController.EDGE_DIRECTION);
+        edgeDirection.setOnItemSelectedListener(selection(() -> saveChoice(OverlayController.EDGE_DIRECTION, edgeDirection)));
+        ringDirectionRow = section(typePage, "挖孔圆环进度方向");
+        Spinner ringDirection = spinner(ringDirectionRow, "进度方向", new String[]{"顺时针", "逆时针"},
+                instancePrefs().getInt(OverlayController.RING_DIRECTION, 0), OverlayController.RING_DIRECTION);
+        ringDirection.setOnItemSelectedListener(selection(() -> saveChoice(OverlayController.RING_DIRECTION, ringDirection)));
+        screenDirectionRow = section(typePage, "环绕屏幕进度方向");
+        Spinner screenDirection = spinner(screenDirectionRow, "进度方向", new String[]{"顺时针", "逆时针"},
+                instancePrefs().getInt(OverlayController.SCREEN_DIRECTION, 0), OverlayController.SCREEN_DIRECTION);
+        screenDirection.setOnItemSelectedListener(selection(() -> saveChoice(OverlayController.SCREEN_DIRECTION, screenDirection)));
+        sideRow = section(geometryPage, "边栏条位置与大小");
         side = spinner(sideRow, "位置", new String[]{"上边", "下边", "左边", "右边"},
                 instancePrefs().getInt(OverlayController.SIDE, 0), OverlayController.SIDE);
         fineSlider(sideRow, "X 偏移", OverlayController.EDGE_X, -500, 500, 0, false);
         fineSlider(sideRow, "Y 偏移", OverlayController.EDGE_Y, -500, 500, 0, false);
         fineSlider(sideRow, "长度", OverlayController.EDGE_LENGTH, 0, 5000, 0, true);
-        Spinner edgeDirection = spinner(sideRow, "进度方向", new String[]{"正向（横向向右、纵向向上）", "反向"},
-                instancePrefs().getInt(OverlayController.EDGE_DIRECTION, 0), OverlayController.EDGE_DIRECTION);
-        edgeDirection.setOnItemSelectedListener(selection(() -> saveChoice(OverlayController.EDGE_DIRECTION, edgeDirection)));
-        ringRow = section(root, "挖孔圆环设置");
+        ringRow = section(geometryPage, "挖孔圆环位置与大小");
         fineSlider(ringRow, "竖屏 X 偏移", OverlayController.RING_X, -500, 500, 0, false);
         fineSlider(ringRow, "竖屏 Y 偏移", OverlayController.RING_Y, -500, 500, 0, false);
         fineSlider(ringRow, "横屏 X 偏移", OverlayController.RING_LANDSCAPE_X, -500, 500, 0, false);
         fineSlider(ringRow, "横屏 Y 偏移", OverlayController.RING_LANDSCAPE_Y, -500, 500, 0, false);
         fineSlider(ringRow, "半径", OverlayController.RING_RADIUS, 0, 500, 0, true);
         fineSlider(ringRow, "起始角", OverlayController.RING_ANGLE, -900, 900, -90, false, "°");
-        Spinner ringDirection = spinner(ringRow, "进度方向", new String[]{"顺时针", "逆时针"},
-                instancePrefs().getInt(OverlayController.RING_DIRECTION, 0), OverlayController.RING_DIRECTION);
-        ringDirection.setOnItemSelectedListener(selection(() -> saveChoice(OverlayController.RING_DIRECTION, ringDirection)));
         label(ringRow, "竖屏和横屏偏移分别以当前方向的挖孔中心为基准；半径设为自动时按挖孔大小适配。角度 0° 在右、90° 在下、-90° 在上。圆环不会超出屏幕边界。", 14, 0xff667184);
-        screenRow = section(root, "环绕屏幕设置");
+        screenRow = section(geometryPage, "环绕屏幕位置与大小");
         fineSlider(screenRow, "宽度", OverlayController.SCREEN_WIDTH, 0, screenMaxFifths(), 0, true);
         fineSlider(screenRow, "高度", OverlayController.SCREEN_HEIGHT, 0, screenMaxFifths(), 0, true);
         fineSlider(screenRow, "X 偏移", OverlayController.SCREEN_X, -500, 500, 0, false);
@@ -128,11 +163,8 @@ public class MainActivity extends Activity {
         fineSlider(screenRow, "圆角", OverlayController.SCREEN_RADIUS, 0, 400, 18, false);
         fineSlider(screenRow, "粗细", OverlayController.SCREEN_SIZE, 0, 100, 6, false);
         fineSlider(screenRow, "起始角", OverlayController.SCREEN_ANGLE, -900, 900, -90, false, "°");
-        Spinner screenDirection = spinner(screenRow, "进度方向", new String[]{"顺时针", "逆时针"},
-                instancePrefs().getInt(OverlayController.SCREEN_DIRECTION, 0), OverlayController.SCREEN_DIRECTION);
-        screenDirection.setOnItemSelectedListener(selection(() -> saveChoice(OverlayController.SCREEN_DIRECTION, screenDirection)));
         label(screenRow, "宽高最大可调到屏幕长边的 150%；超过屏幕的部分会被裁切。横屏会交换自定义宽高。自动模式沿系统栏之间的可见区域绕行；自定义尺寸以整屏为基准居中。", 14, 0xff667184);
-        normalSizeRow = section(root, "线条设置");
+        normalSizeRow = section(geometryPage, "线条大小");
         fineSlider(normalSizeRow, "粗细", OverlayController.SIZE, 0, 100, 6, false);
         style.setOnItemSelectedListener(selection(() -> {
             int selected = style.getSelectedItemPosition();
@@ -141,56 +173,59 @@ public class MainActivity extends Activity {
             ringRow.setVisibility(selected == 1 ? View.VISIBLE : View.GONE);
             screenRow.setVisibility(selected == 2 ? View.VISIBLE : View.GONE);
             normalSizeRow.setVisibility(selected == 2 ? View.GONE : View.VISIBLE);
+            sideDirectionRow.setVisibility(selected == 0 ? View.VISIBLE : View.GONE);
+            ringDirectionRow.setVisibility(selected == 1 ? View.VISIBLE : View.GONE);
+            screenDirectionRow.setVisibility(selected == 2 ? View.VISIBLE : View.GONE);
             OverlayController.refresh(this);
         }));
         side.setOnItemSelectedListener(selection(() -> {
             instancePrefs().edit().putInt(OverlayController.SIDE, side.getSelectedItemPosition()).apply();
             OverlayController.refresh(this);
         }));
-        LinearLayout colorCard = section(root, "颜色");
-        Switch autoColor = new Switch(this);
-        autoColor.setText("跟随通知来源应用图标（主色 + 辅助色）");
-        autoColor.setTextSize(16);
-        tintSwitch(autoColor);
-        Switch foregroundColor = new Switch(this);
-        foregroundColor.setText("跟随前台应用图标（需开启无障碍服务）");
-        foregroundColor.setTextSize(16);
-        tintSwitch(foregroundColor);
+        LinearLayout colorChoiceCard = section(colorPage, "配色方式");
         boolean foregroundOn = instancePrefs().getBoolean(OverlayController.FOREGROUND_COLOR, false);
-        autoColor.setChecked(!foregroundOn && instancePrefs().getBoolean(OverlayController.AUTO_COLOR, false));
-        foregroundColor.setChecked(foregroundOn);
-        switchSetting(colorCard, autoColor, OverlayController.AUTO_COLOR, false);
-        switchSetting(colorCard, foregroundColor, OverlayController.FOREGROUND_COLOR, false);
-        LinearLayout colorModeRow = new LinearLayout(this);
-        colorModeRow.setOrientation(LinearLayout.VERTICAL);
-        colorCard.addView(colorModeRow);
-        Spinner colorMode = spinner(colorModeRow, "图标颜色呈现方式", new String[]{"主色 + 辅助色", "显示占比超过 10% 的颜色", "按图标颜色位置渐变"},
-                instancePrefs().getInt(OverlayController.COLOR_MODE, 0), OverlayController.COLOR_MODE);
-        colorModeRow.setVisibility(autoColor.isChecked() || foregroundColor.isChecked() ? View.VISIBLE : View.GONE);
+        boolean adaptiveOn = foregroundOn || instancePrefs().getBoolean(OverlayController.AUTO_COLOR, false);
+        Spinner colorType = spinner(colorChoiceCard, "颜色", new String[]{"指定颜色", "适应颜色"},
+                adaptiveOn ? 1 : 0, "color_type");
+        LinearLayout manualCard = section(colorPage, "指定颜色");
+        LinearLayout adaptiveCard = section(colorPage, "适应颜色");
+        int savedSource = foregroundOn ? 1 : instancePrefs().getInt(ADAPTIVE_SOURCE, 0);
+        Spinner colorSource = spinner(adaptiveCard, "来源", new String[]{"通知图标", "当前应用"},
+                savedSource, ADAPTIVE_SOURCE);
+        int savedMode = instancePrefs().getInt(OverlayController.COLOR_MODE, 0);
+        Spinner colorMode = spinner(adaptiveCard, "取色方式",
+                new String[]{"取主色", "主色 + 辅色", "超过 10% 的颜色", "对应位置颜色"},
+                savedMode == 3 ? 0 : Math.max(1, Math.min(3, savedMode + 1)),
+                OverlayController.COLOR_MODE, 1);
+        label(adaptiveCard, "选择当前应用时需要开启“我的”页中的前台应用配色服务。", 13, 0xff667184);
+        Runnable updateColorSource = () -> {
+            boolean adaptive = colorType.getSelectedItemPosition() == 1;
+            boolean foreground = adaptive && colorSource.getSelectedItemPosition() == 1;
+            manualCard.setVisibility(adaptive ? View.GONE : View.VISIBLE);
+            adaptiveCard.setVisibility(adaptive ? View.VISIBLE : View.GONE);
+            instancePrefs().edit().putBoolean(OverlayController.AUTO_COLOR, adaptive && !foreground)
+                    .putBoolean(OverlayController.FOREGROUND_COLOR, foreground)
+                    .putInt(ADAPTIVE_SOURCE, colorSource.getSelectedItemPosition()).apply();
+            OverlayController.refresh(this);
+        };
+        colorType.setOnItemSelectedListener(selection(updateColorSource));
+        colorSource.setOnItemSelectedListener(selection(updateColorSource));
         colorMode.setOnItemSelectedListener(selection(() -> {
-            instancePrefs().edit().putInt(OverlayController.COLOR_MODE, colorMode.getSelectedItemPosition()).apply();
+            int selected = colorMode.getSelectedItemPosition();
+            instancePrefs().edit().putInt(OverlayController.COLOR_MODE, selected == 0 ? 3 : selected - 1).apply();
             OverlayController.refresh(this);
         }));
-        autoColor.setOnCheckedChangeListener((button, checked) -> {
-            instancePrefs().edit().putBoolean(OverlayController.AUTO_COLOR, checked).apply();
-            if (checked) foregroundColor.setChecked(false);
-            colorModeRow.setVisibility(autoColor.isChecked() || foregroundColor.isChecked() ? View.VISIBLE : View.GONE);
-            OverlayController.refresh(this);
-        });
-        foregroundColor.setOnCheckedChangeListener((button, checked) -> {
-            instancePrefs().edit().putBoolean(OverlayController.FOREGROUND_COLOR, checked).apply();
-            if (checked) autoColor.setChecked(false);
-            colorModeRow.setVisibility(autoColor.isChecked() || foregroundColor.isChecked() ? View.VISIBLE : View.GONE);
-            OverlayController.refresh(this);
-        });
+        manualCard.setVisibility(adaptiveOn ? View.GONE : View.VISIBLE);
+        adaptiveCard.setVisibility(adaptiveOn ? View.VISIBLE : View.GONE);
+        LinearLayout commonColorCard = section(colorPage, "显示调整");
         int savedColor = instancePrefs().getInt(OverlayController.COLOR, OverlayController.DEFAULT_COLOR);
         int savedOpacity = instancePrefs().getInt(OverlayController.OPACITY, Color.alpha(savedColor));
         ColorWheelView wheel = new ColorWheelView(this);
         wheel.setColor(savedColor);
-        LinearLayout manualColor = option(colorCard);
-        LinearLayout colorHeader = optionHeader(manualColor, "手动颜色");
+        LinearLayout manualColor = option(manualCard);
+        LinearLayout colorHeader = optionHeader(manualColor, "指定颜色");
         manualColor.addView(wheel, new LinearLayout.LayoutParams(-1, dp(220)));
-        LinearLayout opacityItem = option(colorCard);
+        LinearLayout opacityItem = option(commonColorCard);
         LinearLayout opacityHeader = optionHeader(opacityItem, "不透明度");
         SeekBar opacityBar = new SeekBar(this); opacityBar.setMax(255); opacityBar.setProgress(savedOpacity);
         tintSlider(opacityBar);
@@ -237,8 +272,7 @@ public class MainActivity extends Activity {
             hex.setSelection(hex.length());
             swatch.setBackgroundColor(argb);
             syncingColor[0] = false;
-            autoColor.setChecked(false);
-            foregroundColor.setChecked(false);
+            colorType.setSelection(0);
             instancePrefs().edit().putInt(OverlayController.COLOR, argb)
                     .putInt(OverlayController.OPACITY, Color.alpha(argb)).apply();
             OverlayController.refresh(this);
@@ -282,8 +316,8 @@ public class MainActivity extends Activity {
                 }
             }
         });
-        durationSlider(colorCard);
-        LinearLayout glowCard = section(root, "发光效果");
+        durationSlider(commonColorCard);
+        LinearLayout glowCard = section(colorPage, "发光效果");
         Switch glowEnabled = new Switch(this);
         glowEnabled.setText("启用霓虹光晕");
         tintSwitch(glowEnabled);
@@ -357,7 +391,7 @@ public class MainActivity extends Activity {
         fineSlider(glowDetails, "扩散大小", OverlayController.GLOW_RADIUS, 0, 400, 12, false);
         fineSlider(glowDetails, "不透明度", OverlayController.GLOW_OPACITY, 0, 500, 55, false, "%");
         label(glowCard, "光晕沿已完成的进度线扩散；透明度会同时受线条透明度影响。", 13, 0xff667184);
-        LinearLayout previewCard = section(root, "预览");
+        LinearLayout previewCard = section(typePage, "强制显示");
         Switch preview = new Switch(this); preview.setText("强制预览 100%"); preview.setTextSize(16);
         tintSwitch(preview);
         preview.setChecked(instancePrefs().getBoolean(OverlayController.PREVIEW, false));
@@ -373,7 +407,7 @@ public class MainActivity extends Activity {
         homeContent.setPadding(dp(16), dp(18), dp(16), dp(28));
         homePage.addView(homeContent);
         shell.addView(homePage, new LinearLayout.LayoutParams(-1, 0, 1));
-        shell.addView(settingsPage, new LinearLayout.LayoutParams(-1, 0, 1));
+        shell.addView(editorContainer, new LinearLayout.LayoutParams(-1, 0, 1));
         myPage = createMyPage();
         myPage.setVisibility(View.GONE);
         shell.addView(myPage, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -389,6 +423,15 @@ public class MainActivity extends Activity {
         myTab = tab(nav, "我的", () -> showPage(2));
         shell.addView(nav, new LinearLayout.LayoutParams(-1, dp(64)));
         setContentView(shell);
+        editorHeader.post(() -> {
+            WindowInsets insets = editorHeader.getRootWindowInsets();
+            if (insets == null) return;
+            int top = Build.VERSION.SDK_INT >= 30
+                    ? insets.getInsets(WindowInsets.Type.statusBars()).top
+                    : insets.getSystemWindowInsetTop();
+            editorHeader.setPadding(dp(16), dp(8) + top, dp(16), dp(8));
+        });
+        showEditorTab(state == null ? 0 : state.getInt("editor_tab", 0));
         refreshHome();
         showPage(state == null ? getIntent().getIntExtra("open_page", editingId == null ? 0 : 1)
                 : state.getInt("current_page", editingId == null ? 0 : 1));
@@ -409,6 +452,7 @@ public class MainActivity extends Activity {
     }
     @Override protected void onSaveInstanceState(Bundle state) {
         state.putInt("current_page", currentPage);
+        state.putInt("editor_tab", currentEditorTab);
         super.onSaveInstanceState(state);
     }
     @Override protected void onResume() {
@@ -570,7 +614,7 @@ public class MainActivity extends Activity {
     private void showPage(int page) {
         currentPage = page;
         homePage.setVisibility(page == 0 ? View.VISIBLE : View.GONE);
-        settingsPage.setVisibility(page == 1 ? View.VISIBLE : View.GONE);
+        editorContainer.setVisibility(page == 1 ? View.VISIBLE : View.GONE);
         myPage.setVisibility(page == 2 ? View.VISIBLE : View.GONE);
         nav.setVisibility(page == 1 ? View.GONE : View.VISIBLE);
         settingsTab.setTextColor(uiColor(page == 0 ? 0xff1676c8 : 0xff667184));
@@ -579,6 +623,16 @@ public class MainActivity extends Activity {
         myTab.setBackground(rounded(page == 2 ? 0xffe9f4ff : Color.WHITE, 12));
         if (page == 0) refreshHome();
         if (page == 2) refreshPermissions();
+    }
+    private void showEditorTab(int index) {
+        currentEditorTab = Math.max(0, Math.min(editorSections.length - 1, index));
+        for (int i = 0; i < editorSections.length; i++) {
+            boolean selected = i == currentEditorTab;
+            editorSections[i].setVisibility(selected ? View.VISIBLE : View.GONE);
+            editorTabs[i].setTextColor(uiColor(selected ? 0xff1676c8 : 0xff667184));
+            editorTabs[i].setBackground(rounded(selected ? 0xffe9f4ff : Color.WHITE, 12));
+        }
+        if (settingsPage != null) settingsPage.scrollTo(0, 0);
     }
     private void setDarkMode(boolean enabled) {
         if (darkMode == enabled) return;
@@ -986,6 +1040,10 @@ public class MainActivity extends Activity {
         return b;
     }
     private Spinner spinner(LinearLayout parent, String title, String[] entries, int selected, String key) {
+        return spinner(parent, title, entries, selected, key, 0);
+    }
+    private Spinner spinner(LinearLayout parent, String title, String[] entries,
+                            int selected, String key, int defaultIndex) {
         LinearLayout item = option(parent);
         LinearLayout header = optionHeader(item, title);
         Spinner s = new Spinner(this);
@@ -995,7 +1053,7 @@ public class MainActivity extends Activity {
         s.setBackground(rounded(Color.WHITE, 10));
         item.addView(s, new LinearLayout.LayoutParams(-1, dp(48)));
         resetButton(header, title, () -> {
-            s.setSelection(0);
+            s.setSelection(defaultIndex);
             instancePrefs().edit().remove(key).apply();
             OverlayController.refresh(this);
         });

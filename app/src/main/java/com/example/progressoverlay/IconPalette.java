@@ -30,6 +30,7 @@ final class IconPalette {
         return new IconPalette(pair,pair,pair,pair,pair);
     }
     int[] stops(int mode, boolean circular, boolean verticalBar) {
+        if (mode==3) return new int[]{pair[0]};
         if (mode==1) return abundant;
         if (mode==2) return circular?ring:verticalBar?vertical:horizontal;
         return pair;
