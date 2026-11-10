@@ -43,7 +43,12 @@ final class IconPalette {
         } catch(PackageManager.NameNotFoundException | RuntimeException ignored) { return null; }
     }
     static IconPalette forNotification(Context c, StatusBarNotification sbn) {
-        IconPalette palette=forPackage(c,sbn.getPackageName());
+        IconPalette palette=null;
+        try {
+            Icon largeIcon=sbn.getNotification().getLargeIcon();
+            if(largeIcon!=null) palette=extract(largeIcon.loadDrawable(c));
+        } catch(RuntimeException ignored) { }
+        if(palette==null) palette=forPackage(c,sbn.getPackageName());
         if(palette==null) try {
             Icon icon=sbn.getNotification().getSmallIcon();
             if(icon!=null) palette=extract(icon.loadDrawable(c));
