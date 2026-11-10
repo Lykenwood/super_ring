@@ -469,15 +469,24 @@ final class OverlayController {
             }
             float start = nearestAngleDistance(measure, bounds.centerX(), bounds.centerY(), startAngle);
             float end = start + routeLength * value;
-            Path filled = new Path();
             if (value >= 1f) drawWithGlow(canvas, p, opacity, (target, brush, spread) -> target.drawPath(route, brush));
             else if (value > 0f) {
-                if (end <= routeLength) measure.getSegment(start, end, filled, true);
-                else {
-                    measure.getSegment(start, routeLength, filled, true);
-                    measure.getSegment(0, end - routeLength, filled, true);
+                Path first = new Path();
+                if (end <= routeLength) {
+                    measure.getSegment(start, end, first, true);
+                    drawWithGlow(canvas, p, opacity,
+                            (target, brush, spread) -> target.drawPath(first, brush));
+                } else {
+                    Path wrapped = new Path();
+                    measure.getSegment(start, routeLength, first, true);
+                    measure.getSegment(0, end - routeLength, wrapped, true);
+                    // Keep the two pieces separate when progress crosses the
+                    // path's original starting point.
+                    drawWithGlow(canvas, p, opacity, (target, brush, spread) -> {
+                        target.drawPath(first, brush);
+                        target.drawPath(wrapped, brush);
+                    });
                 }
-                drawWithGlow(canvas, p, opacity, (target, brush, spread) -> target.drawPath(filled, brush));
             }
         }
         private float nearestAngleDistance(PathMeasure measure, float cx, float cy, float degrees) {
