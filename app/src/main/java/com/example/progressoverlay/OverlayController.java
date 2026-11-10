@@ -17,6 +17,7 @@ import android.graphics.PathMeasure;
 import android.graphics.Shader;
 import android.graphics.SweepGradient;
 import android.hardware.display.DisplayManager;
+import android.hardware.input.InputManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -56,6 +57,8 @@ final class OverlayController {
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static WindowManager manager;
     private static Context windowContext;
+    private static int windowType;
+    private static boolean accessibilityOverlayFailed;
     private static ProgressView view;
     private static float live = -1f;
     private static IconPalette liveColors;
@@ -71,6 +74,10 @@ final class OverlayController {
     static void refresh(Context c) {
         Context app = c.getApplicationContext();
         MAIN.post(() -> update(app));
+    }
+    static void accessibilityServiceConnected(Context c) {
+        accessibilityOverlayFailed = false;
+        refresh(c);
     }
     static void setForegroundColors(Context c, IconPalette colors) {
         foregroundColors = colors;
@@ -91,15 +98,28 @@ final class OverlayController {
             }
         }
         if (!hasVisible) { remove(); return; }
+        int desiredType = ForegroundAppService.isConnected() && !accessibilityOverlayFailed
+                ? WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+                : WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY;
+        if (view != null && windowType != desiredType) remove();
+        if (!addWindow(c, desiredType) && desiredType == WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY) {
+            accessibilityOverlayFailed = true;
+            addWindow(c, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);
+        }
+        if (view != null) view.invalidate();
+    }
+    private static boolean addWindow(Context c, int type) {
         if (windowContext == null) {
-            windowContext = c;
-            if (Build.VERSION.SDK_INT >= 30) {
+            windowContext = type == WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+                    ? ForegroundAppService.connectedService() : c;
+            if (windowContext == null) return false;
+            if (type == WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY && Build.VERSION.SDK_INT >= 30) {
                 DisplayManager displays = (DisplayManager)c.getSystemService(Context.DISPLAY_SERVICE);
                 Display display = displays.getDisplay(Display.DEFAULT_DISPLAY);
                 if (display != null) {
                     Context displayContext = c.createDisplayContext(display);
                     windowContext = displayContext.createWindowContext(
-                            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, null);
+                            type, null);
                 }
             }
             manager = (WindowManager)windowContext.getSystemService(Context.WINDOW_SERVICE);
@@ -107,32 +127,38 @@ final class OverlayController {
         if (view == null) {
             view = new ProgressView(windowContext);
             WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
-                    -1, -1, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    -1, -1, type,
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                             | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                             | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                             | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                     android.graphics.PixelFormat.TRANSLUCENT);
             lp.gravity = Gravity.TOP | Gravity.LEFT;
-            // Per-line opacity is applied by Paint; the overlay window must not
-            // dim the entire composition a second time.
-            lp.alpha = 1f;
+            // Android 12+ can discard touches passing through an opaque app overlay.
+            // Accessibility overlays are trusted while the service is connected.
+            lp.alpha = type == WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                    && Build.VERSION.SDK_INT >= 31 ? safeTouchOpacity(c) : 1f;
             if (Build.VERSION.SDK_INT >= 30) {
                 lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
                 lp.setFitInsetsTypes(0);
             } else if (Build.VERSION.SDK_INT >= 28) {
                 lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
             }
-            try { manager.addView(view, lp); }
-            catch (RuntimeException ignored) { view = null; manager = null; windowContext = null; return; }
+            try { manager.addView(view, lp); windowType = type; }
+            catch (RuntimeException ignored) { remove(); return false; }
         }
-        view.invalidate();
+        return true;
+    }
+    private static float safeTouchOpacity(Context c) {
+        InputManager input = (InputManager)c.getSystemService(Context.INPUT_SERVICE);
+        float maximum = input == null ? .8f : input.getMaximumObscuringOpacityForTouch();
+        return Math.max(0f, Math.min(.79f, maximum - .01f));
     }
     private static void remove() {
         if (view != null && manager != null) {
             try { manager.removeView(view); } catch (RuntimeException ignored) { }
         }
-        view = null; manager = null; windowContext = null;
+        view = null; manager = null; windowContext = null; windowType = 0;
     }
 
     private static final class ProgressView extends View {

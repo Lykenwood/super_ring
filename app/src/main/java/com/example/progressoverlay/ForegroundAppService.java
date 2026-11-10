@@ -8,13 +8,17 @@ public class ForegroundAppService extends AccessibilityService {
     private static ForegroundAppService active;
     private String lastPackage;
 
-    @Override protected void onServiceConnected() { active = this; }
+    @Override protected void onServiceConnected() {
+        active = this;
+        OverlayController.accessibilityServiceConnected(this);
+    }
 
     static void resetCachedPackage() {
         if (active != null) active.lastPackage = null;
     }
 
     static boolean isConnected() { return active != null; }
+    static ForegroundAppService connectedService() { return active; }
 
     @Override public void onAccessibilityEvent(AccessibilityEvent event) {
         if (!OverlayController.isEnabled(this)) { lastPackage = null; return; }
