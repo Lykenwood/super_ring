@@ -35,6 +35,9 @@ import android.widget.Switch;
 import android.widget.TextView;
 import java.util.Locale;
 import java.util.List;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.function.Function;
 
 public class MainActivity extends Activity {
     private TextView overlayPermission, listenerPermission, accessibilityPermission;
@@ -190,6 +193,23 @@ public class MainActivity extends Activity {
         Button opacityMinus = stepButton(opacityRow, "−", "降低颜色不透明度");
         TextView opacityLabel = stepValue(opacityRow);
         Button opacityPlus = stepButton(opacityRow, "+", "提高颜色不透明度");
+        makeValueEditable(opacityLabel);
+        opacityLabel.setOnClickListener(v -> showNumberEditor("颜色不透明度",
+                String.format(Locale.US, "%.1f", opacityBar.getProgress() * 100f / 255f),
+                "输入 0–100%，会换算为 8 位透明度。", raw -> {
+                    try {
+                        BigDecimal percent = new BigDecimal(raw.trim().replace(',', '.'));
+                        if (percent.compareTo(BigDecimal.ZERO) < 0
+                                || percent.compareTo(BigDecimal.valueOf(100)) > 0)
+                            return "请输入 0–100 之间的数值";
+                        int alpha = percent.multiply(BigDecimal.valueOf(255))
+                                .divide(BigDecimal.valueOf(100), 0, RoundingMode.HALF_UP).intValueExact();
+                        opacityBar.setProgress(alpha);
+                        return null;
+                    } catch (NumberFormatException | ArithmeticException e) {
+                        return "请输入有效数字";
+                    }
+                }));
         resetButton(opacityHeader, "不透明度", () -> {
             opacityBar.setProgress(255);
             instancePrefs().edit().remove(OverlayController.OPACITY).apply();
@@ -206,7 +226,7 @@ public class MainActivity extends Activity {
             syncingColor[0] = true;
             wheel.setColor(argb);
             opacityBar.setProgress(Color.alpha(argb));
-            opacityLabel.setText(opacityText(Color.alpha(argb)));
+            setValueLabel(opacityLabel, "颜色不透明度", opacityText(Color.alpha(argb)));
             hex.setText(String.format(Locale.US, "#%08X", argb));
             hex.setSelection(hex.length());
             swatch.setBackgroundColor(argb);
@@ -221,7 +241,7 @@ public class MainActivity extends Activity {
                 (opacityBar.getProgress() << 24) | 0x002fabff));
         int initialArgb = (savedOpacity << 24) | (savedColor & 0x00ffffff);
         hex.setText(String.format(Locale.US, "#%08X", initialArgb));
-        opacityLabel.setText(opacityText(savedOpacity));
+        setValueLabel(opacityLabel, "颜色不透明度", opacityText(savedOpacity));
         swatch.setBackgroundColor(initialArgb);
         wheel.setListener(rgb -> applyManualColor.accept((opacityBar.getProgress() << 24) | (rgb & 0x00ffffff)));
         opacityBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
@@ -230,7 +250,7 @@ public class MainActivity extends Activity {
                 int argb = (alpha << 24) | (instancePrefs()
                         .getInt(OverlayController.COLOR, savedColor) & 0x00ffffff);
                 syncingColor[0] = true;
-                opacityLabel.setText(opacityText(alpha));
+                setValueLabel(opacityLabel, "颜色不透明度", opacityText(alpha));
                 hex.setText(String.format(Locale.US, "#%08X", argb));
                 hex.setSelection(hex.length());
                 swatch.setBackgroundColor(argb);
@@ -575,26 +595,49 @@ public class MainActivity extends Activity {
         Button minus = stepButton(steps, "−", title + "减 0.2 " + unit);
         TextView valueLabel = stepValue(steps);
         Button plus = stepButton(steps, "+", title + "加 0.2 " + unit);
+        makeValueEditable(valueLabel);
         String initialText = sliderText(saved, autoZero, unit);
         if (saved > maxFifths && (OverlayController.SCREEN_WIDTH.equals(key)
                 || OverlayController.SCREEN_HEIGHT.equals(key)))
             initialText += String.format(Locale.CHINA, "（当前滑杆上限 %.1f dp）", maxFifths / 5f);
-        valueLabel.setText(initialText);
-        valueLabel.setContentDescription(title + "：" + initialText);
+        setValueLabel(valueLabel, title, initialText);
+        valueLabel.setOnClickListener(v -> showNumberEditor(title,
+                String.format(Locale.US, "%.1f", OverlayController.fifths(instancePrefs(), key, defaultDp) / 5f),
+                String.format(Locale.CHINA, "范围 %.1f–%.1f %s，步进 0.2。%s",
+                        minFifths / 5f, maxFifths / 5f, unit,
+                        autoZero ? "输入 0 表示自动。" : ""), raw -> {
+                    try {
+                        BigDecimal scaled = new BigDecimal(raw.trim().replace(',', '.'))
+                                .multiply(BigDecimal.valueOf(5));
+                        int value = scaled.intValueExact();
+                        if (value < minFifths || value > maxFifths)
+                            return String.format(Locale.CHINA, "请输入 %.1f–%.1f 之间的数值",
+                                    minFifths / 5f, maxFifths / 5f);
+                        changedByUser[0] = true;
+                        bar.setProgress(value - minFifths);
+                        // setProgress does not notify when the thumb is already there.
+                        instancePrefs().edit().putInt(key + "_fifths", value).apply();
+                        setValueLabel(valueLabel, title, sliderText(value, autoZero, unit));
+                        OverlayController.refresh(this);
+                        return null;
+                    } catch (NumberFormatException e) {
+                        return "请输入有效数字";
+                    } catch (ArithmeticException e) {
+                        return "请输入 0.2 的倍数";
+                    }
+                }));
         resetButton(header, title, () -> {
             changedByUser[0] = true;
             bar.setProgress(defaultDp * 5 - minFifths);
             instancePrefs().edit().remove(key).remove(key + "_fifths").apply();
-            valueLabel.setText(sliderText(defaultDp * 5, autoZero, unit));
-            valueLabel.setContentDescription(title + "：" + sliderText(defaultDp * 5, autoZero, unit));
+            setValueLabel(valueLabel, title, sliderText(defaultDp * 5, autoZero, unit));
             OverlayController.refresh(this);
         });
         bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 if (!fromUser && !changedByUser[0]) return;
                 int value = progress + minFifths;
-                valueLabel.setText(sliderText(value, autoZero, unit));
-                valueLabel.setContentDescription(title + "：" + sliderText(value, autoZero, unit));
+                setValueLabel(valueLabel, title, sliderText(value, autoZero, unit));
                 instancePrefs().edit().putInt(key + "_fifths", value).apply();
                 OverlayController.refresh(MainActivity.this);
             }
@@ -612,6 +655,47 @@ public class MainActivity extends Activity {
     }
     private String sliderText(int fifths, boolean autoZero, String unit) {
         return autoZero && fifths == 0 ? "自动" : String.format(Locale.CHINA, "%.1f %s", fifths / 5f, unit);
+    }
+    private void makeValueEditable(TextView value) {
+        value.setTextColor(0xff1767b4);
+        value.setBackground(rounded(0xffe7f0fa, 10));
+        value.setClickable(true);
+        value.setFocusable(true);
+        value.setPadding(dp(4), 0, dp(4), 0);
+    }
+    private void setValueLabel(TextView value, String title, String text) {
+        value.setText(text);
+        value.setContentDescription(title + "：" + text + "，点击输入");
+    }
+    private void showNumberEditor(String title, String initial, String hint,
+                                  Function<String, String> save) {
+        EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL
+                | InputType.TYPE_NUMBER_FLAG_SIGNED);
+        input.setText(initial);
+        input.setSelectAllOnFocus(true);
+        LinearLayout content = new LinearLayout(this);
+        content.setPadding(dp(24), 0, dp(24), 0);
+        content.addView(input, new LinearLayout.LayoutParams(-1, dp(56)));
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("输入" + title)
+                .setMessage(hint)
+                .setView(content)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("保存", null)
+                .create();
+        dialog.setOnShowListener(ignored -> {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                String error = save.apply(input.getText().toString());
+                if (error == null) dialog.dismiss();
+                else input.setError(error);
+            });
+            input.requestFocus();
+            input.selectAll();
+            dialog.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
+        });
+        dialog.show();
     }
     private int screenMaxFifths() {
         WindowManager wm = getSystemService(WindowManager.class);
