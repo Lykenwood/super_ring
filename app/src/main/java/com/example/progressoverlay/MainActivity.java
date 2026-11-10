@@ -40,6 +40,9 @@ import java.math.RoundingMode;
 import java.util.function.Function;
 
 public class MainActivity extends Activity {
+    private static final String DARK_MODE = "dark_mode";
+    private boolean darkMode;
+    private int currentPage;
     private TextView overlayPermission, listenerPermission, accessibilityPermission;
     private TextView settingsTab, myTab;
     private ScrollView settingsPage, myPage, homePage;
@@ -50,16 +53,19 @@ public class MainActivity extends Activity {
     private LinearLayout sideRow, ringRow, screenRow, normalSizeRow;
 
     @Override public void onCreate(Bundle state) {
+        darkMode = OverlayController.prefs(this).getBoolean(DARK_MODE, false);
+        setTheme(darkMode ? android.R.style.Theme_Material_NoActionBar
+                : android.R.style.Theme_Material_Light_NoActionBar);
         super.onCreate(state);
         InstanceStore.ensure(this);
         editingId = getIntent().getStringExtra("edit_id");
         creating = getIntent().getBooleanExtra("is_new", false);
         if (editingId != null && !InstanceStore.ids(this).contains(editingId)) editingId = null;
-        getWindow().setStatusBarColor(Color.WHITE);
-        getWindow().setNavigationBarColor(Color.WHITE);
+        getWindow().setStatusBarColor(darkMode ? 0xff10151f : Color.WHITE);
+        getWindow().setNavigationBarColor(darkMode ? 0xff10151f : Color.WHITE);
         LinearLayout shell = new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
-        shell.setBackgroundColor(0xfff4f7fb);
+        shell.setBackgroundColor(uiColor(0xfff4f7fb));
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         settingsPage = scroll;
@@ -177,7 +183,7 @@ public class MainActivity extends Activity {
             colorModeRow.setVisibility(autoColor.isChecked() || foregroundColor.isChecked() ? View.VISIBLE : View.GONE);
             OverlayController.refresh(this);
         });
-        int savedColor = instancePrefs().getInt(OverlayController.COLOR, 0xff2fabff);
+        int savedColor = instancePrefs().getInt(OverlayController.COLOR, OverlayController.DEFAULT_COLOR);
         int savedOpacity = instancePrefs().getInt(OverlayController.OPACITY, Color.alpha(savedColor));
         ColorWheelView wheel = new ColorWheelView(this);
         wheel.setColor(savedColor);
@@ -238,7 +244,7 @@ public class MainActivity extends Activity {
             OverlayController.refresh(this);
         };
         resetButton(colorHeader, "颜色", () -> applyManualColor.accept(
-                (opacityBar.getProgress() << 24) | 0x002fabff));
+                (opacityBar.getProgress() << 24) | (OverlayController.DEFAULT_COLOR & 0x00ffffff)));
         int initialArgb = (savedOpacity << 24) | (savedColor & 0x00ffffff);
         hex.setText(String.format(Locale.US, "#%08X", initialArgb));
         setValueLabel(opacityLabel, "颜色不透明度", opacityText(savedOpacity));
@@ -372,11 +378,11 @@ public class MainActivity extends Activity {
         myPage.setVisibility(View.GONE);
         shell.addView(myPage, new LinearLayout.LayoutParams(-1, 0, 1));
         View divider = new View(this);
-        divider.setBackgroundColor(0xffe4eaf1);
+        divider.setBackgroundColor(uiColor(0xffe4eaf1));
         shell.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
         nav = new LinearLayout(this);
         nav.setOrientation(LinearLayout.HORIZONTAL);
-        nav.setBackgroundColor(Color.WHITE);
+        nav.setBackgroundColor(uiColor(Color.WHITE));
         nav.setPadding(dp(8), dp(5), dp(8), dp(5));
         nav.setElevation(dp(4));
         settingsTab = tab(nav, "首页", () -> showPage(0));
@@ -384,13 +390,26 @@ public class MainActivity extends Activity {
         shell.addView(nav, new LinearLayout.LayoutParams(-1, dp(64)));
         setContentView(shell);
         refreshHome();
-        showPage(editingId == null ? 0 : 1);
+        showPage(state == null ? getIntent().getIntExtra("open_page", editingId == null ? 0 : 1)
+                : state.getInt("current_page", editingId == null ? 0 : 1));
         getWindow().getDecorView().post(() -> {
-            WindowInsetsController controller = getWindow().getDecorView().getWindowInsetsController();
-            if (controller != null) controller.setSystemBarsAppearance(
-                    WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
-                    WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
+            View decor = getWindow().getDecorView();
+            if (Build.VERSION.SDK_INT >= 30) {
+                WindowInsetsController controller = decor.getWindowInsetsController();
+                if (controller == null) return;
+                int flags = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                        | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                controller.setSystemBarsAppearance(darkMode ? 0 : flags, flags);
+            } else {
+                int flags = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                decor.setSystemUiVisibility((decor.getSystemUiVisibility() & ~flags)
+                        | (darkMode ? 0 : flags));
+            }
         });
+    }
+    @Override protected void onSaveInstanceState(Bundle state) {
+        state.putInt("current_page", currentPage);
+        super.onSaveInstanceState(state);
     }
     @Override protected void onResume() {
         super.onResume();
@@ -408,6 +427,18 @@ public class MainActivity extends Activity {
         scroll.addView(content);
         label(content, "我的", 28, 0xff182438);
         label(content, "权限状态会在返回应用时自动更新。", 15, 0xff667184);
+        LinearLayout appearanceCard = section(content, "外观");
+        Switch darkSwitch = new Switch(this);
+        darkSwitch.setText("深色模式");
+        darkSwitch.setTextSize(16);
+        tintSwitch(darkSwitch);
+        darkSwitch.setChecked(darkMode);
+        appearanceCard.addView(darkSwitch);
+        darkSwitch.setOnCheckedChangeListener((button, checked) -> setDarkMode(checked));
+        LinearLayout appearanceActions = new LinearLayout(this);
+        appearanceActions.setGravity(Gravity.END);
+        appearanceCard.addView(appearanceActions);
+        resetButton(appearanceActions, "深色模式", () -> setDarkMode(false));
         LinearLayout overlayCard = section(content, "悬浮窗");
         label(overlayCard, "用于在其他应用上方显示进度条。", 14, 0xff667184);
         overlayPermission = label(overlayCard, "检测中", 16, 0xff182438);
@@ -523,7 +554,7 @@ public class MainActivity extends Activity {
         Button button = new Button(this);
         button.setAllCaps(false);
         button.setText(title);
-        button.setTextColor(0xff1767b4);
+        button.setTextColor(uiColor(0xff1767b4));
         button.setTextSize(14);
         button.setBackground(rounded(0xffe7f0fa, 10));
         button.setStateListAnimator(null);
@@ -537,16 +568,24 @@ public class MainActivity extends Activity {
                 .putExtra("edit_id", id).putExtra("is_new", isNew));
     }
     private void showPage(int page) {
+        currentPage = page;
         homePage.setVisibility(page == 0 ? View.VISIBLE : View.GONE);
         settingsPage.setVisibility(page == 1 ? View.VISIBLE : View.GONE);
         myPage.setVisibility(page == 2 ? View.VISIBLE : View.GONE);
         nav.setVisibility(page == 1 ? View.GONE : View.VISIBLE);
-        settingsTab.setTextColor(page == 0 ? 0xff1676c8 : 0xff667184);
-        myTab.setTextColor(page == 2 ? 0xff1676c8 : 0xff667184);
+        settingsTab.setTextColor(uiColor(page == 0 ? 0xff1676c8 : 0xff667184));
+        myTab.setTextColor(uiColor(page == 2 ? 0xff1676c8 : 0xff667184));
         settingsTab.setBackground(rounded(page == 0 ? 0xffe9f4ff : Color.WHITE, 12));
         myTab.setBackground(rounded(page == 2 ? 0xffe9f4ff : Color.WHITE, 12));
         if (page == 0) refreshHome();
         if (page == 2) refreshPermissions();
+    }
+    private void setDarkMode(boolean enabled) {
+        if (darkMode == enabled) return;
+        OverlayController.prefs(this).edit().putBoolean(DARK_MODE, enabled).apply();
+        currentPage = 2;
+        getIntent().putExtra("open_page", 2);
+        recreate();
     }
     private void refreshPermissions() {
         if (overlayPermission == null) return;
@@ -568,14 +607,14 @@ public class MainActivity extends Activity {
         permissionText(listenerPermission, "通知使用权", listener);
         if (foregroundService && !ForegroundAppService.isConnected()) {
             accessibilityPermission.setText("前台应用配色服务：已开启，但服务未连接");
-            accessibilityPermission.setTextColor(0xffb05a24);
+            accessibilityPermission.setTextColor(uiColor(0xffb05a24));
         } else {
             permissionText(accessibilityPermission, "前台应用配色服务", foregroundService);
         }
     }
     private void permissionText(TextView view, String title, boolean granted) {
         view.setText(title + "：" + (granted ? "已开启 ✓" : "未开启"));
-        view.setTextColor(granted ? 0xff16804a : 0xffb05a24);
+        view.setTextColor(uiColor(granted ? 0xff16804a : 0xffb05a24));
     }
     private void fineSlider(LinearLayout parent, String title, String key,
                             int minFifths, int maxFifths, int defaultDp, boolean autoZero) {
@@ -718,7 +757,7 @@ public class MainActivity extends Activity {
         return autoZero && fifths == 0 ? "自动" : String.format(Locale.CHINA, "%.1f %s", fifths / 5f, unit);
     }
     private void makeValueEditable(TextView value) {
-        value.setTextColor(0xff1767b4);
+        value.setTextColor(uiColor(0xff1767b4));
         value.setBackground(rounded(0xffe7f0fa, 10));
         value.setClickable(true);
         value.setFocusable(true);
@@ -780,25 +819,49 @@ public class MainActivity extends Activity {
         OverlayController.refresh(this);
     }
     private int dp(int n) { return (int)(n * getResources().getDisplayMetrics().density + .5f); }
+    private int uiColor(int light) {
+        if (!darkMode) return light;
+        switch (light) {
+            case Color.WHITE: return 0xff1a2230;
+            case 0xfff4f7fb: return 0xff10151f;
+            case 0xffe4eaf1: return 0xff344255;
+            case 0xfff6f8fc: return 0xff222d3d;
+            case 0xffe7f0fa: return 0xff263b51;
+            case 0xffe9f4ff: return 0xff2c4660;
+            case 0xff182438: return 0xffedf4ff;
+            case 0xff25354a:
+            case 0xff293b52: return 0xffdce8f5;
+            case 0xff667184: return 0xffaabbd0;
+            case 0xff1767b4:
+            case 0xff1676c8: return 0xff8bc8ff;
+            case 0xffdce5ee: return 0xff3b4a5d;
+            case 0xfff8fbff: return 0xffedf4ff;
+            case 0xff87bceb: return 0xff5c96c5;
+            case 0xffcbd5df: return 0xff607083;
+            case 0xff16804a: return 0xff79dda8;
+            case 0xffb05a24: return 0xffffbd7a;
+            default: return light;
+        }
+    }
     private GradientDrawable rounded(int color, int radiusDp) {
         GradientDrawable shape = new GradientDrawable();
-        shape.setColor(color);
+        shape.setColor(uiColor(color));
         shape.setCornerRadius(dp(radiusDp));
         return shape;
     }
     private void tintSlider(SeekBar bar) {
-        ColorStateList accent = ColorStateList.valueOf(0xff1676c8);
+        ColorStateList accent = ColorStateList.valueOf(uiColor(0xff1676c8));
         bar.setProgressTintList(accent);
         bar.setThumbTintList(accent);
-        bar.setProgressBackgroundTintList(ColorStateList.valueOf(0xffdce5ee));
+        bar.setProgressBackgroundTintList(ColorStateList.valueOf(uiColor(0xffdce5ee)));
     }
     private void tintSwitch(Switch control) {
         control.setThumbTintList(new ColorStateList(
                 new int[][]{new int[]{android.R.attr.state_checked}, new int[]{}},
-                new int[]{0xff1676c8, 0xfff8fbff}));
+                new int[]{uiColor(0xff1676c8), uiColor(0xfff8fbff)}));
         control.setTrackTintList(new ColorStateList(
                 new int[][]{new int[]{android.R.attr.state_checked}, new int[]{}},
-                new int[]{0xff87bceb, 0xffcbd5df}));
+                new int[]{uiColor(0xff87bceb), uiColor(0xffcbd5df)}));
     }
     private LinearLayout section(LinearLayout parent, String title) {
         LinearLayout card = new LinearLayout(this);
@@ -812,7 +875,7 @@ public class MainActivity extends Activity {
         heading.setText(title);
         heading.setTextSize(18);
         heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        heading.setTextColor(0xff182438);
+        heading.setTextColor(uiColor(0xff182438));
         heading.setPadding(dp(2), dp(2), dp(2), dp(10));
         card.addView(heading);
         return card;
@@ -836,7 +899,7 @@ public class MainActivity extends Activity {
         name.setText(title);
         name.setTextSize(15);
         name.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        name.setTextColor(0xff25354a);
+        name.setTextColor(uiColor(0xff25354a));
         row.addView(name, new LinearLayout.LayoutParams(0, -2, 1));
         return row;
     }
@@ -852,7 +915,7 @@ public class MainActivity extends Activity {
         b.setAllCaps(false);
         b.setText(text);
         b.setTextSize(20);
-        b.setTextColor(0xff1767b4);
+        b.setTextColor(uiColor(0xff1767b4));
         b.setContentDescription(description);
         b.setMinWidth(0);
         b.setMinHeight(0);
@@ -864,18 +927,18 @@ public class MainActivity extends Activity {
     private TextView stepValue(LinearLayout row) {
         TextView v = new TextView(this);
         v.setTextSize(14);
-        v.setTextColor(0xff293b52);
+        v.setTextColor(uiColor(0xff293b52));
         v.setGravity(Gravity.CENTER);
         row.addView(v, new LinearLayout.LayoutParams(0, dp(44), 1));
         return v;
     }
     private TextView label(LinearLayout parent, String text, int size, int color) {
-        TextView v = new TextView(this); v.setText(text); v.setTextSize(size); v.setTextColor(color);
+        TextView v = new TextView(this); v.setText(text); v.setTextSize(size); v.setTextColor(uiColor(color));
         v.setPadding(0, dp(10), 0, dp(10)); parent.addView(v); return v;
     }
     private void button(LinearLayout parent, String text, Runnable action) {
         Button b = new Button(this); b.setAllCaps(false); b.setText(text);
-        b.setTextSize(14); b.setTextColor(0xff1767b4);
+        b.setTextSize(14); b.setTextColor(uiColor(0xff1767b4));
         b.setBackground(rounded(0xffe7f0fa, 10));
         b.setStateListAnimator(null);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(46));
@@ -893,7 +956,7 @@ public class MainActivity extends Activity {
         TextView name = new TextView(this);
         name.setText(title);
         name.setTextSize(15);
-        name.setTextColor(0xff25354a);
+        name.setTextColor(uiColor(0xff25354a));
         name.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         row.addView(name, new LinearLayout.LayoutParams(0, -2, 1));
         control.setText("");
@@ -912,7 +975,7 @@ public class MainActivity extends Activity {
         b.setAllCaps(false);
         b.setText("重置默认");
         b.setTextSize(13);
-        b.setTextColor(0xff1767b4);
+        b.setTextColor(uiColor(0xff1767b4));
         b.setMinWidth(0);
         b.setMinHeight(0);
         b.setBackground(rounded(0xffe7f0fa, 9));

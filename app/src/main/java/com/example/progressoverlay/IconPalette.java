@@ -23,7 +23,9 @@ final class IconPalette {
         this.pair=pair; this.abundant=abundant; this.horizontal=horizontal;
         this.vertical=vertical; this.ring=ring;
     }
-    static IconPalette sample() { return fromPair(new int[]{0xff2fabff,0xff32d7a0}); }
+    static IconPalette sample() {
+        return fromPair(new int[]{OverlayController.DEFAULT_COLOR, OverlayController.DEFAULT_COLOR});
+    }
     private static IconPalette fromPair(int[] pair) {
         return new IconPalette(pair,pair,pair,pair,pair);
     }

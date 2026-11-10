@@ -39,6 +39,7 @@ final class OverlayController {
     static final String PREFS = "display";
     static final String ENABLED = "enabled";
     static final String PREVIEW = "preview", STYLE = "style", SIDE = "side", SIZE = "size", COLOR = "color", AUTO_COLOR = "auto_color";
+    static final int DEFAULT_COLOR = 0xffeeeeee;
     static final String OPACITY = "opacity";
     static final String FOREGROUND_COLOR = "foreground_color";
     static final String COLOR_MODE = "color_mode";
@@ -205,7 +206,7 @@ final class OverlayController {
             float thickness = dp(fifths(p, displayStyle == 2 ? SCREEN_SIZE : SIZE, 6) / 5f);
             lineThickness = thickness;
             float value = Math.max(0f, Math.min(1f, ratio));
-            int savedColor = p.getInt(COLOR, Color.rgb(47, 171, 255));
+            int savedColor = p.getInt(COLOR, DEFAULT_COLOR);
             int opacity = p.getInt(OPACITY, Color.alpha(savedColor));
             int color = withAlpha(savedColor, opacity);
             IconPalette palette = null;
