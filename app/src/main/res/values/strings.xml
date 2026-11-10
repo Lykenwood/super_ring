@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="foreground_accessibility_description">仅在切换应用窗口时读取应用包名，用图标颜色绘制进度条；不读取屏幕内容。</string>
+</resources>
