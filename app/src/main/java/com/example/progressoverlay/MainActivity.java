@@ -276,6 +276,7 @@ public class MainActivity extends Activity {
                 }
             }
         });
+        durationSlider(colorCard);
         LinearLayout glowCard = section(root, "发光效果");
         Switch glowEnabled = new Switch(this);
         glowEnabled.setText("启用霓虹光晕");
@@ -579,6 +580,66 @@ public class MainActivity extends Activity {
     private void fineSlider(LinearLayout parent, String title, String key,
                             int minFifths, int maxFifths, int defaultDp, boolean autoZero) {
         fineSlider(parent, title, key, minFifths, maxFifths, defaultDp, autoZero, "dp");
+    }
+    private void durationSlider(LinearLayout parent) {
+        String title = "颜色过渡时长";
+        String key = OverlayController.COLOR_TRANSITION_MS;
+        int defaultMs = OverlayController.DEFAULT_COLOR_TRANSITION_MS;
+        LinearLayout item = option(parent);
+        LinearLayout header = optionHeader(item, title);
+        SeekBar bar = new SeekBar(this);
+        tintSlider(bar);
+        bar.setMax(5000);
+        bar.setProgress(Math.max(0, Math.min(5000, instancePrefs().getInt(key, defaultMs))));
+        item.addView(bar, new LinearLayout.LayoutParams(-1, dp(48)));
+        LinearLayout steps = stepperRow(item);
+        Button minus = stepButton(steps, "−", title + "减 1 ms");
+        TextView valueLabel = stepValue(steps);
+        Button plus = stepButton(steps, "+", title + "加 1 ms");
+        makeValueEditable(valueLabel);
+        setValueLabel(valueLabel, title, bar.getProgress() + " ms");
+        boolean[] changedByUser = {false};
+        java.util.function.IntConsumer save = value -> {
+            instancePrefs().edit().putInt(key, value).apply();
+            setValueLabel(valueLabel, title, value + " ms");
+            OverlayController.refresh(this);
+        };
+        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                if (fromUser || changedByUser[0]) save.accept(progress);
+            }
+            public void onStartTrackingTouch(SeekBar seekBar) { changedByUser[0] = true; }
+            public void onStopTrackingTouch(SeekBar seekBar) { }
+        });
+        minus.setOnClickListener(v -> {
+            changedByUser[0] = true;
+            bar.setProgress(Math.max(0, bar.getProgress() - 1));
+        });
+        plus.setOnClickListener(v -> {
+            changedByUser[0] = true;
+            bar.setProgress(Math.min(5000, bar.getProgress() + 1));
+        });
+        valueLabel.setOnClickListener(v -> showNumberEditor(title,
+                String.valueOf(instancePrefs().getInt(key, defaultMs)),
+                "输入 0–5000 之间的整数毫秒；0 表示立即切换。", raw -> {
+                    try {
+                        int value = Integer.parseInt(raw.trim());
+                        if (value < 0 || value > 5000) return "请输入 0–5000 之间的整数";
+                        changedByUser[0] = true;
+                        bar.setProgress(value);
+                        save.accept(value);
+                        return null;
+                    } catch (NumberFormatException e) {
+                        return "请输入整数毫秒";
+                    }
+                }));
+        resetButton(header, title, () -> {
+            changedByUser[0] = true;
+            bar.setProgress(defaultMs);
+            instancePrefs().edit().remove(key).apply();
+            setValueLabel(valueLabel, title, defaultMs + " ms");
+            OverlayController.refresh(this);
+        });
     }
     private void fineSlider(LinearLayout parent, String title, String key,
                             int minFifths, int maxFifths, int defaultDp, boolean autoZero, String unit) {

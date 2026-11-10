@@ -44,6 +44,8 @@ final class OverlayController {
     static final String COLOR_MODE = "color_mode";
     static final String GLOW_ENABLED = "glow_enabled", GLOW_FOLLOW = "glow_follow";
     static final String GLOW_COLOR = "glow_color", GLOW_RADIUS = "glow_radius", GLOW_OPACITY = "glow_opacity";
+    static final String COLOR_TRANSITION_MS = "color_transition_ms";
+    static final int DEFAULT_COLOR_TRANSITION_MS = 200;
     static final String RING_X = "ring_x", RING_Y = "ring_y", RING_RADIUS = "ring_radius";
     static final String RING_LANDSCAPE_X = "ring_landscape_x", RING_LANDSCAPE_Y = "ring_landscape_y";
     static final String RING_ANGLE = "ring_angle", RING_DIRECTION = "ring_direction";
@@ -163,7 +165,6 @@ final class OverlayController {
 
     private static final class ProgressView extends View {
         private static final int COLOR_STOPS = 16;
-        private static final long COLOR_TRANSITION_MS = 200;
         private static final AccelerateDecelerateInterpolator COLOR_EASING = new AccelerateDecelerateInterpolator();
         float ratio;
         private SharedPreferences settings;
@@ -176,6 +177,7 @@ final class OverlayController {
             int[] displayedColors, startingColors, targetColors;
             int displayedGlowColor, startingGlowColor, targetGlowColor;
             long colorTransitionStart;
+            int colorTransitionDurationMs;
             boolean colorTransitionActive;
         }
         ProgressView(Context c) {
@@ -214,7 +216,8 @@ final class OverlayController {
             int mode = p.getInt(COLOR_MODE, 0);
             int side = p.getInt(SIDE, 0);
             int[] colors = transitionColors(palette, mode, displayStyle, side, color,
-                    opacity, p.getInt(GLOW_COLOR, 0xff37bfff));
+                    opacity, p.getInt(GLOW_COLOR, 0xff37bfff),
+                    Math.max(0, Math.min(5000, p.getInt(COLOR_TRANSITION_MS, DEFAULT_COLOR_TRANSITION_MS))));
             paint.setColor(colors[0]); paint.setStyle(Paint.Style.FILL);
             paint.setShader(null);
             if (displayStyle == 2) {
@@ -320,7 +323,7 @@ final class OverlayController {
             return (color & 0x00ffffff) | (Math.max(0, Math.min(255, alpha)) << 24);
         }
         private int[] transitionColors(IconPalette palette, int mode, int style, int side,
-                                       int color, int opacity, int glowColor) {
+                                       int color, int opacity, int glowColor, int durationMs) {
             int[] source = palette == null ? new int[]{color}
                     : palette.stops(mode, style != 0, style == 0 && side >= 2);
             int[] next = new int[COLOR_STOPS];
@@ -336,26 +339,30 @@ final class OverlayController {
                 state.targetColors = next;
                 state.displayedGlowColor = glowColor;
                 state.targetGlowColor = glowColor;
-            } else if (!Arrays.equals(next, state.targetColors) || glowColor != state.targetGlowColor) {
+                state.colorTransitionDurationMs = durationMs;
+            } else if (!Arrays.equals(next, state.targetColors) || glowColor != state.targetGlowColor
+                    || (state.colorTransitionActive && durationMs != state.colorTransitionDurationMs)) {
                 advanceColors(now);
                 state.startingColors = state.displayedColors.clone();
                 state.startingGlowColor = state.displayedGlowColor;
                 state.targetColors = next;
                 state.targetGlowColor = glowColor;
                 state.colorTransitionStart = now;
-                state.colorTransitionActive = ValueAnimator.areAnimatorsEnabled();
+                state.colorTransitionDurationMs = durationMs;
+                state.colorTransitionActive = durationMs > 0 && ValueAnimator.areAnimatorsEnabled();
                 if (!state.colorTransitionActive) {
                     state.displayedColors = next.clone();
                     state.displayedGlowColor = glowColor;
                 }
-            }
+            } else state.colorTransitionDurationMs = durationMs;
             advanceColors(now);
             if (state.colorTransitionActive) postInvalidateOnAnimation();
             return state.displayedColors;
         }
         private void advanceColors(long now) {
             if (!state.colorTransitionActive) return;
-            float elapsed = Math.min(1f, (now - state.colorTransitionStart) / (float)COLOR_TRANSITION_MS);
+            float elapsed = Math.min(1f, (now - state.colorTransitionStart)
+                    / (float)state.colorTransitionDurationMs);
             float fraction = COLOR_EASING.getInterpolation(elapsed);
             for (int i = 0; i < COLOR_STOPS; i++)
                 state.displayedColors[i] = blend(state.startingColors[i], state.targetColors[i], fraction);
