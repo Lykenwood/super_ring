@@ -10,6 +10,9 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.graphics.RecordingCanvas;
+import android.graphics.RenderEffect;
+import android.graphics.RenderNode;
 import android.graphics.LinearGradient;
 import android.graphics.Matrix;
 import android.graphics.Path;
@@ -134,7 +137,9 @@ final class OverlayController {
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                             | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                             | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                            | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                            | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                            | (Build.VERSION.SDK_INT >= 31
+                                    ? WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED : 0),
                     android.graphics.PixelFormat.TRANSLUCENT);
             lp.gravity = Gravity.TOP | Gravity.LEFT;
             // Android 12+ can discard touches passing through an opaque app overlay.
@@ -179,15 +184,46 @@ final class OverlayController {
             float displayedProgress, startingProgress, targetProgress;
             long progressTransitionStart;
             boolean progressInitialized, progressTransitionActive;
+            ScreenGeometry screenGeometry;
+            float glowFilterRadius = -1f;
+            BlurMaskFilter outerGlowFilter, innerGlowFilter;
+            RenderNode outerGlowNode, innerGlowNode;
+            float hardwareGlowRadius = -1f;
             int[] displayedColors, startingColors, targetColors;
             int displayedGlowColor, startingGlowColor, targetGlowColor;
             long colorTransitionStart;
             int colorTransitionDurationMs;
             boolean colorTransitionActive;
         }
+        private static final class ScreenGeometry {
+            final RectF bounds;
+            final float corner, startAngle, length, start;
+            final int direction;
+            final Path route;
+            final PathMeasure measure;
+
+            ScreenGeometry(RectF bounds, float corner, int direction, float startAngle) {
+                this.bounds = new RectF(bounds);
+                this.corner = corner;
+                this.direction = direction;
+                this.startAngle = startAngle;
+                route = new Path();
+                route.addRoundRect(bounds, corner, corner,
+                        direction == 0 ? Path.Direction.CW : Path.Direction.CCW);
+                measure = new PathMeasure(route, true);
+                length = measure.getLength();
+                start = length > 0f ? nearestAngleDistance(measure,
+                        bounds.centerX(), bounds.centerY(), startAngle) : 0f;
+            }
+
+            boolean matches(RectF nextBounds, float nextCorner, int nextDirection, float nextAngle) {
+                return bounds.equals(nextBounds) && corner == nextCorner
+                        && direction == nextDirection && startAngle == nextAngle;
+            }
+        }
         ProgressView(Context c) {
             super(c);
-            setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+            if (Build.VERSION.SDK_INT < 31) setLayerType(View.LAYER_TYPE_SOFTWARE, null);
         }
         float dp(float n) { return n * getResources().getDisplayMetrics().density; }
         @Override protected void onDraw(Canvas canvas) {
@@ -435,19 +471,50 @@ final class OverlayController {
                     }
                     int glowAlpha = glowPaint.getAlpha();
                     float stroke = paint.getStrokeWidth();
+                    boolean hardwareGlow = Build.VERSION.SDK_INT >= 31 && canvas.isHardwareAccelerated();
+                    if (hardwareGlow) prepareHardwareGlow(radius);
+                    else prepareSoftwareGlow(radius);
                     float outerSpread = radius * .38f;
                     glowPaint.setAlpha(Math.round(glowAlpha * .65f));
-                    glowPaint.setMaskFilter(new BlurMaskFilter(Math.max(1f, radius * .7f), BlurMaskFilter.Blur.NORMAL));
+                    glowPaint.setMaskFilter(hardwareGlow ? null : state.outerGlowFilter);
                     if (paint.getStyle() == Paint.Style.STROKE) glowPaint.setStrokeWidth(stroke + outerSpread * 2f);
-                    shape.draw(canvas, glowPaint, outerSpread);
+                    if (hardwareGlow) drawHardwareGlow(canvas, state.outerGlowNode, shape, outerSpread);
+                    else shape.draw(canvas, glowPaint, outerSpread);
                     float innerSpread = radius * .14f;
                     glowPaint.setAlpha(Math.round(glowAlpha * .75f));
-                    glowPaint.setMaskFilter(new BlurMaskFilter(Math.max(1f, radius * .28f), BlurMaskFilter.Blur.NORMAL));
+                    glowPaint.setMaskFilter(hardwareGlow ? null : state.innerGlowFilter);
                     if (paint.getStyle() == Paint.Style.STROKE) glowPaint.setStrokeWidth(stroke + innerSpread * 2f);
-                    shape.draw(canvas, glowPaint, innerSpread);
+                    if (hardwareGlow) drawHardwareGlow(canvas, state.innerGlowNode, shape, innerSpread);
+                    else shape.draw(canvas, glowPaint, innerSpread);
                 }
             }
             if (lineThickness > 0f) shape.draw(canvas, paint, 0f);
+        }
+        private void prepareSoftwareGlow(float radius) {
+            if (state.glowFilterRadius == radius) return;
+            state.glowFilterRadius = radius;
+            state.outerGlowFilter = new BlurMaskFilter(Math.max(1f, radius * .7f), BlurMaskFilter.Blur.NORMAL);
+            state.innerGlowFilter = new BlurMaskFilter(Math.max(1f, radius * .28f), BlurMaskFilter.Blur.NORMAL);
+        }
+        private void prepareHardwareGlow(float radius) {
+            if (state.outerGlowNode == null) {
+                state.outerGlowNode = new RenderNode("Super Ring outer glow");
+                state.innerGlowNode = new RenderNode("Super Ring inner glow");
+            }
+            state.outerGlowNode.setPosition(0, 0, getWidth(), getHeight());
+            state.innerGlowNode.setPosition(0, 0, getWidth(), getHeight());
+            if (state.hardwareGlowRadius == radius) return;
+            state.hardwareGlowRadius = radius;
+            state.outerGlowNode.setRenderEffect(RenderEffect.createBlurEffect(
+                    Math.max(1f, radius * .7f), Math.max(1f, radius * .7f), Shader.TileMode.DECAL));
+            state.innerGlowNode.setRenderEffect(RenderEffect.createBlurEffect(
+                    Math.max(1f, radius * .28f), Math.max(1f, radius * .28f), Shader.TileMode.DECAL));
+        }
+        private void drawHardwareGlow(Canvas canvas, RenderNode node, ShapeDrawer shape, float spread) {
+            RecordingCanvas recording = node.beginRecording();
+            try { shape.draw(recording, glowPaint, spread); }
+            finally { node.endRecording(); }
+            canvas.drawRenderNode(node);
         }
 
         private void drawScreen(Canvas canvas, SharedPreferences p, float thickness, float value,
@@ -487,24 +554,28 @@ final class OverlayController {
             if (bounds.width() <= 0 || bounds.height() <= 0) return;
             float corner = Math.min(dp(fifths(p, SCREEN_RADIUS, 18) / 5f), Math.min(bounds.width(), bounds.height()) / 2f);
             int direction = p.getInt(SCREEN_DIRECTION, 0);
-            Path route = new Path(); route.addRoundRect(bounds, corner, corner,
-                    direction == 0 ? Path.Direction.CW : Path.Direction.CCW);
-            PathMeasure measure = new PathMeasure(route, true);
-            float routeLength = measure.getLength();
+            float startAngle = fifths(p, SCREEN_ANGLE, -90) / 5f;
+            ScreenGeometry geometry = state.screenGeometry;
+            if (geometry == null || !geometry.matches(bounds, corner, direction, startAngle)) {
+                geometry = new ScreenGeometry(bounds, corner, direction, startAngle);
+                state.screenGeometry = geometry;
+            }
+            Path route = geometry.route;
+            PathMeasure measure = geometry.measure;
+            float routeLength = geometry.length;
             if (routeLength <= 0) return;
             paint.setShader(null); paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(thickness);
             paint.setStrokeCap(Paint.Cap.ROUND);
             paint.setColor(withAlpha(colors[0], Math.round(Color.alpha(colors[0]) * .27f)));
             if (thickness > 0f) canvas.drawPath(route, paint);
             paint.setColor(colors[0]);
-            float startAngle = fifths(p, SCREEN_ANGLE, -90) / 5f;
             if (varies(colors)) {
                 int[] closed = Arrays.copyOf(colors, colors.length + 1); closed[colors.length] = colors[0];
                 SweepGradient shader = new SweepGradient(bounds.centerX(), bounds.centerY(), closed, null);
                 Matrix matrix = new Matrix(); matrix.setRotate(startAngle, bounds.centerX(), bounds.centerY()); shader.setLocalMatrix(matrix);
                 paint.setShader(shader);
             }
-            float start = nearestAngleDistance(measure, bounds.centerX(), bounds.centerY(), startAngle);
+            float start = geometry.start;
             float end = start + routeLength * value;
             if (value >= 1f) drawWithGlow(canvas, p, opacity, (target, brush, spread) -> target.drawPath(route, brush));
             else if (value > 0f) {
@@ -526,7 +597,7 @@ final class OverlayController {
                 }
             }
         }
-        private float nearestAngleDistance(PathMeasure measure, float cx, float cy, float degrees) {
+        private static float nearestAngleDistance(PathMeasure measure, float cx, float cy, float degrees) {
             float length = measure.getLength(), nearest = 0, best = Float.MAX_VALUE;
             float[] point = new float[2];
             for (int i = 0; i < 720; i++) {
