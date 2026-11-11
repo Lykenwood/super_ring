@@ -6,6 +6,7 @@ import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.graphics.Canvas;
 import android.graphics.BlurMaskFilter;
+import android.graphics.ColorMatrixColorFilter;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Rect;
@@ -50,6 +51,8 @@ final class OverlayController {
     static final String GLOW_COLOR = "glow_color", GLOW_RADIUS = "glow_radius", GLOW_OPACITY = "glow_opacity";
     static final String COLOR_TRANSITION_MS = "color_transition_ms";
     static final int DEFAULT_COLOR_TRANSITION_MS = 200;
+    private static final int COMPLETE_TRANSITION_MS = 250;
+    private static final int FINISH_FADE_MS = 3000;
     static final String RING_X = "ring_x", RING_Y = "ring_y", RING_RADIUS = "ring_radius";
     static final String RING_LANDSCAPE_X = "ring_landscape_x", RING_LANDSCAPE_Y = "ring_landscape_y";
     static final String RING_ANGLE = "ring_angle", RING_DIRECTION = "ring_direction";
@@ -69,13 +72,56 @@ final class OverlayController {
     private static float live = -1f;
     private static IconPalette liveColors;
     private static IconPalette foregroundColors;
+    private static boolean finishing, completionLatched;
+    private static long finishStartedAt;
+    private static int finishGeneration;
 
     static SharedPreferences prefs(Context c) { return c.getSharedPreferences(PREFS, Context.MODE_PRIVATE); }
     static boolean isEnabled(Context c) { return prefs(c).getBoolean(ENABLED, true); }
     static void setLive(Context c, float ratio, IconPalette colors) {
-        live = ratio;
-        liveColors = colors;
-        refresh(c);
+        Context app = c.getApplicationContext();
+        MAIN.post(() -> {
+            if (ratio < 0f) {
+                if (live >= 0f && !completionLatched) startFinish(app);
+            } else if (ratio >= 1f) {
+                if (!completionLatched) {
+                    liveColors = colors;
+                    startFinish(app);
+                }
+            } else {
+                finishGeneration++;
+                finishing = false;
+                completionLatched = false;
+                live = ratio;
+                liveColors = colors;
+            }
+            update(app);
+        });
+    }
+    private static void startFinish(Context c) {
+        finishing = true;
+        completionLatched = true;
+        finishStartedAt = SystemClock.uptimeMillis();
+        live = 1f;
+        int generation = ++finishGeneration;
+        MAIN.postDelayed(() -> {
+            if (!finishing || generation != finishGeneration) return;
+            finishing = false;
+            live = -1f;
+            liveColors = null;
+            update(c);
+        }, COMPLETE_TRANSITION_MS + FINISH_FADE_MS);
+    }
+    static void clearLive(Context c) {
+        Context app = c.getApplicationContext();
+        MAIN.post(() -> {
+            finishGeneration++;
+            finishing = false;
+            completionLatched = false;
+            live = -1f;
+            liveColors = null;
+            update(app);
+        });
     }
     static void refresh(Context c) {
         Context app = c.getApplicationContext();
@@ -171,16 +217,17 @@ final class OverlayController {
 
     private static final class ProgressView extends View {
         private static final int COLOR_STOPS = 16;
-        private static final int PROGRESS_TRANSITION_MS = 300;
-        private static final int PROGRESS_COMPLETE_MS = 120;
+        private static final int PROGRESS_TRANSITION_MS = 500;
         private static final AccelerateDecelerateInterpolator COLOR_EASING = new AccelerateDecelerateInterpolator();
         float ratio;
         private SharedPreferences settings;
         private RenderState state;
         private final Map<String, RenderState> renderStates = new LinkedHashMap<>();
         float lineThickness;
+        float instanceFade = 1f;
         final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         final Paint glowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        final Paint sparklePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private static final class RenderState {
             float displayedProgress, startingProgress, targetProgress;
             long progressTransitionStart;
@@ -242,7 +289,22 @@ final class OverlayController {
                     state.progressInitialized = false;
                     ratio = 1f;
                 } else ratio = transitionProgress(Math.max(0f, Math.min(1f, live)));
-                drawInstance(canvas);
+                int fadeAlpha = 255;
+                if (!preview && finishing) {
+                    long fadeElapsed = SystemClock.uptimeMillis() - finishStartedAt - COMPLETE_TRANSITION_MS;
+                    if (fadeElapsed > 0) fadeAlpha = Math.max(0, 255 - Math.round(255f * fadeElapsed / FINISH_FADE_MS));
+                    if (fadeAlpha > 0) postInvalidateOnAnimation();
+                }
+                if (fadeAlpha > 0) {
+                    instanceFade = fadeAlpha / 255f;
+                    paint.setColorFilter(fadeAlpha == 255 ? null : new ColorMatrixColorFilter(new float[]{
+                            1f, 0f, 0f, 0f, 0f,
+                            0f, 1f, 0f, 0f, 0f,
+                            0f, 0f, 1f, 0f, 0f,
+                            0f, 0f, 0f, fadeAlpha / 255f, 0f
+                    }));
+                    drawInstance(canvas);
+                }
             }
         }
         private float transitionProgress(float target) {
@@ -258,9 +320,9 @@ final class OverlayController {
                     state.progressTransitionActive = false;
                 } else {
                     state.startingProgress = state.displayedProgress;
-                    state.progressTransitionStart = now;
+                    state.progressTransitionStart = finishing && target >= 1f ? finishStartedAt : now;
                     state.progressTransitionDurationMs = target >= 1f
-                            ? PROGRESS_COMPLETE_MS : PROGRESS_TRANSITION_MS;
+                            ? COMPLETE_TRANSITION_MS : PROGRESS_TRANSITION_MS;
                     state.progressTransitionActive = true;
                 }
                 state.targetProgress = target;
@@ -342,6 +404,7 @@ final class OverlayController {
                 }
                 if (value > 0f) drawWithGlow(canvas, p, opacity,
                         (target, brush, spread) -> target.drawArc(arc, startAngle, direction * 360 * value, false, brush));
+                drawRingSparkles(canvas, cx, cy, radius, colors);
             } else {
                 float w = getWidth(), h = getHeight();
                 WindowInsets rootInsets = getRootWindowInsets();
@@ -394,7 +457,81 @@ final class OverlayController {
                                 center + thickness / 2f + spread, top + filled + spread, brush));
                     }
                 }
+                drawEdgeSparkles(canvas, horizontal, side, from, center, length, colors);
             }
+        }
+        private long sparkleAge() {
+            if (!finishing || ratio < 1f || !ValueAnimator.areAnimatorsEnabled()) return -1;
+            long age = SystemClock.uptimeMillis() - finishStartedAt - COMPLETE_TRANSITION_MS;
+            return age >= 0 && age < 1300 ? age : -1;
+        }
+        private void drawRingSparkles(Canvas canvas, float cx, float cy, float radius, int[] colors) {
+            long age = sparkleAge();
+            if (age < 0) return;
+            for (int i = 0; i < 8; i++) {
+                double angle = 2 * Math.PI * (i + .35) / 8;
+                float vx = (float)Math.cos(angle), vy = (float)Math.sin(angle);
+                drawSparkle(canvas, cx + vx * radius, cy + vy * radius,
+                        vx, vy, colors[i * colors.length / 8], age, i);
+            }
+        }
+        private void drawEdgeSparkles(Canvas canvas, boolean horizontal, int side,
+                                      float from, float center, float length, int[] colors) {
+            long age = sparkleAge();
+            if (age < 0 || length <= 0f) return;
+            for (int i = 0; i < 10; i++) {
+                float position = from + length * (i + .5f) / 10f;
+                float x = horizontal ? position : center;
+                float y = horizontal ? center : position;
+                float vx = horizontal ? 0f : side == 2 ? 1f : -1f;
+                float vy = horizontal ? side == 0 ? 1f : -1f : 0f;
+                drawSparkle(canvas, x, y, vx, vy,
+                        colors[i * colors.length / 10], age, i);
+            }
+        }
+        private void drawScreenSparkles(Canvas canvas, ScreenGeometry geometry, int[] colors) {
+            long age = sparkleAge();
+            if (age < 0) return;
+            float[] point = new float[2];
+            for (int i = 0; i < 12; i++) {
+                geometry.measure.getPosTan(geometry.length * (i + .5f) / 12f, point, null);
+                float vx = geometry.bounds.centerX() - point[0];
+                float vy = geometry.bounds.centerY() - point[1];
+                float distance = (float)Math.hypot(vx, vy);
+                if (distance <= 0f) continue;
+                drawSparkle(canvas, point[0], point[1], vx / distance, vy / distance,
+                        colors[i * colors.length / 12], age, i);
+            }
+        }
+        private void drawSparkle(Canvas canvas, float x, float y, float vx, float vy,
+                                 int sourceColor, long age, int index) {
+            float t = (age - (index % 4) * 65f) / 1050f;
+            if (t < 0f || t >= 1f) return;
+            float drift = dp(12f + index % 5 * 3.5f) * t;
+            float sideways = dp((index % 3 - 1) * 5f) * t;
+            x += vx * drift - vy * sideways;
+            y += vy * drift + vx * sideways;
+            float pulse = .8f + .2f * (float)Math.sin(t * Math.PI * 5f + index);
+            float opacity = Math.min(1f, t * 8f) * (float)Math.sqrt(1f - t) * pulse * instanceFade
+                    * Color.alpha(sourceColor) / 255f;
+            if (opacity <= 0f) return;
+            int tint = sourceColor | 0xff000000;
+            int bright = blend(tint, Color.WHITE, .25f);
+            float size = dp(index % 5 == 0 ? 2.8f : 1.5f + index % 3 * .35f);
+            sparklePaint.setShader(null);
+            sparklePaint.setStyle(Paint.Style.FILL);
+            if (index % 3 == 0) {
+                sparklePaint.setColor(withAlpha(tint, Math.round(150f * opacity)));
+                canvas.drawCircle(x, y, size * 3.8f, sparklePaint);
+            }
+            sparklePaint.setColor(withAlpha(bright, Math.round(255f * opacity)));
+            canvas.drawCircle(x, y, size, sparklePaint);
+            sparklePaint.setStyle(Paint.Style.STROKE);
+            sparklePaint.setStrokeCap(Paint.Cap.ROUND);
+            sparklePaint.setStrokeWidth(dp(.8f));
+            float ray = size * 3.5f * (1f - t * .4f);
+            canvas.drawLine(x - ray, y, x + ray, y, sparklePaint);
+            canvas.drawLine(x, y - ray, x, y + ray, sparklePaint);
         }
         private float clamp(float n, float min, float max) { return Math.max(min, Math.min(max, n)); }
         private int withAlpha(int color, int alpha) {
@@ -600,6 +737,7 @@ final class OverlayController {
                     });
                 }
             }
+            drawScreenSparkles(canvas, geometry, colors);
         }
         private static float nearestAngleDistance(PathMeasure measure, float cx, float cy, float degrees) {
             float length = measure.getLength(), nearest = 0, best = Float.MAX_VALUE;
