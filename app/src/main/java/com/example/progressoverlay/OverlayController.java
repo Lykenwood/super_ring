@@ -171,7 +171,8 @@ final class OverlayController {
 
     private static final class ProgressView extends View {
         private static final int COLOR_STOPS = 16;
-        private static final int PROGRESS_TRANSITION_MS = 1000;
+        private static final int PROGRESS_TRANSITION_MS = 300;
+        private static final int PROGRESS_COMPLETE_MS = 120;
         private static final AccelerateDecelerateInterpolator COLOR_EASING = new AccelerateDecelerateInterpolator();
         float ratio;
         private SharedPreferences settings;
@@ -183,6 +184,7 @@ final class OverlayController {
         private static final class RenderState {
             float displayedProgress, startingProgress, targetProgress;
             long progressTransitionStart;
+            int progressTransitionDurationMs;
             boolean progressInitialized, progressTransitionActive;
             ScreenGeometry screenGeometry;
             float glowFilterRadius = -1f;
@@ -257,6 +259,8 @@ final class OverlayController {
                 } else {
                     state.startingProgress = state.displayedProgress;
                     state.progressTransitionStart = now;
+                    state.progressTransitionDurationMs = target >= 1f
+                            ? PROGRESS_COMPLETE_MS : PROGRESS_TRANSITION_MS;
                     state.progressTransitionActive = true;
                 }
                 state.targetProgress = target;
@@ -268,7 +272,7 @@ final class OverlayController {
         private void advanceProgress(long now) {
             if (!state.progressTransitionActive) return;
             float elapsed = Math.min(1f, (now - state.progressTransitionStart)
-                    / (float)PROGRESS_TRANSITION_MS);
+                    / (float)state.progressTransitionDurationMs);
             state.displayedProgress = state.startingProgress
                     + (state.targetProgress - state.startingProgress) * elapsed;
             if (elapsed >= 1f) state.progressTransitionActive = false;
