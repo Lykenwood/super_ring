@@ -11,7 +11,7 @@ public class ProgressListener extends NotificationListenerService {
     @Override public void onListenerConnected() { active = this; scan(); }
     @Override public void onListenerDisconnected() {
         if (active == this) active = null;
-        OverlayController.setLive(this, -1f, null);
+        OverlayController.clearLive(this);
     }
     @Override public void onNotificationPosted(StatusBarNotification sbn) { scan(); }
     @Override public void onNotificationRemoved(StatusBarNotification sbn) { scan(); }
