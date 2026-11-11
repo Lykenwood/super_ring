@@ -166,6 +166,7 @@ final class OverlayController {
 
     private static final class ProgressView extends View {
         private static final int COLOR_STOPS = 16;
+        private static final int PROGRESS_TRANSITION_MS = 1000;
         private static final AccelerateDecelerateInterpolator COLOR_EASING = new AccelerateDecelerateInterpolator();
         float ratio;
         private SharedPreferences settings;
@@ -175,6 +176,9 @@ final class OverlayController {
         final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         final Paint glowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private static final class RenderState {
+            float displayedProgress, startingProgress, targetProgress;
+            long progressTransitionStart;
+            boolean progressInitialized, progressTransitionActive;
             int[] displayedColors, startingColors, targetColors;
             int displayedGlowColor, startingGlowColor, targetGlowColor;
             long colorTransitionStart;
@@ -196,9 +200,42 @@ final class OverlayController {
                 if (!preview && live < 0) continue;
                 settings = p;
                 state = renderStates.computeIfAbsent(id, key -> new RenderState());
-                ratio = preview ? 1f : live;
+                if (preview) {
+                    state.progressInitialized = false;
+                    ratio = 1f;
+                } else ratio = transitionProgress(Math.max(0f, Math.min(1f, live)));
                 drawInstance(canvas);
             }
+        }
+        private float transitionProgress(float target) {
+            long now = SystemClock.uptimeMillis();
+            if (!state.progressInitialized) {
+                state.displayedProgress = target;
+                state.targetProgress = target;
+                state.progressInitialized = true;
+            } else if (Float.compare(target, state.targetProgress) != 0) {
+                advanceProgress(now);
+                if (target < state.displayedProgress || !ValueAnimator.areAnimatorsEnabled()) {
+                    state.displayedProgress = target;
+                    state.progressTransitionActive = false;
+                } else {
+                    state.startingProgress = state.displayedProgress;
+                    state.progressTransitionStart = now;
+                    state.progressTransitionActive = true;
+                }
+                state.targetProgress = target;
+            }
+            advanceProgress(now);
+            if (state.progressTransitionActive) postInvalidateOnAnimation();
+            return state.displayedProgress;
+        }
+        private void advanceProgress(long now) {
+            if (!state.progressTransitionActive) return;
+            float elapsed = Math.min(1f, (now - state.progressTransitionStart)
+                    / (float)PROGRESS_TRANSITION_MS);
+            state.displayedProgress = state.startingProgress
+                    + (state.targetProgress - state.startingProgress) * elapsed;
+            if (elapsed >= 1f) state.progressTransitionActive = false;
         }
         private void drawInstance(Canvas canvas) {
             SharedPreferences p = settings;
