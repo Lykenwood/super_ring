@@ -217,7 +217,7 @@ final class OverlayController {
 
     private static final class ProgressView extends View {
         private static final int COLOR_STOPS = 16;
-        private static final int PROGRESS_TRANSITION_MS = 500;
+        private static final int PROGRESS_TRANSITION_MS = 1000;
         private static final AccelerateDecelerateInterpolator COLOR_EASING = new AccelerateDecelerateInterpolator();
         float ratio;
         private SharedPreferences settings;
