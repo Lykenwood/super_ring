@@ -11,6 +11,7 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.graphics.RadialGradient;
 import android.graphics.RecordingCanvas;
 import android.graphics.RenderEffect;
 import android.graphics.RenderNode;
@@ -228,6 +229,7 @@ final class OverlayController {
         final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         final Paint glowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         final Paint sparklePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        final Matrix haloMatrix = new Matrix();
         private static final class RenderState {
             float displayedProgress, startingProgress, targetProgress;
             long progressTransitionStart;
@@ -238,6 +240,7 @@ final class OverlayController {
             BlurMaskFilter outerGlowFilter, innerGlowFilter;
             RenderNode outerGlowNode, innerGlowNode;
             float hardwareGlowRadius = -1f;
+            final Map<Integer, RadialGradient> sparkleHalos = new LinkedHashMap<>();
             int[] displayedColors, startingColors, targetColors;
             int displayedGlowColor, startingGlowColor, targetGlowColor;
             long colorTransitionStart;
@@ -521,8 +524,22 @@ final class OverlayController {
             sparklePaint.setShader(null);
             sparklePaint.setStyle(Paint.Style.FILL);
             if (index % 3 == 0) {
-                sparklePaint.setColor(withAlpha(tint, Math.round(150f * opacity)));
-                canvas.drawCircle(x, y, size * 3.8f, sparklePaint);
+                RadialGradient halo = state.sparkleHalos.get(tint);
+                if (halo == null) {
+                    if (state.sparkleHalos.size() >= 32) state.sparkleHalos.clear();
+                    halo = new RadialGradient(0f, 0f, 1f,
+                            new int[]{withAlpha(tint, 180), withAlpha(tint, 70), withAlpha(tint, 0)},
+                            new float[]{0f, .3f, 1f}, Shader.TileMode.CLAMP);
+                    state.sparkleHalos.put(tint, halo);
+                }
+                float haloRadius = size * 4.2f;
+                haloMatrix.setScale(haloRadius, haloRadius);
+                haloMatrix.postTranslate(x, y);
+                halo.setLocalMatrix(haloMatrix);
+                sparklePaint.setShader(halo);
+                sparklePaint.setAlpha(Math.round(255f * opacity));
+                canvas.drawCircle(x, y, haloRadius, sparklePaint);
+                sparklePaint.setShader(null);
             }
             sparklePaint.setColor(withAlpha(bright, Math.round(255f * opacity)));
             canvas.drawCircle(x, y, size, sparklePaint);
