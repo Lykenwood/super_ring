@@ -5,6 +5,8 @@ import android.app.AlertDialog;
 import android.app.NotificationManager;
 import android.content.ComponentName;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Point;
@@ -36,6 +38,9 @@ import android.widget.Switch;
 import android.widget.TextView;
 import java.util.Locale;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.function.Function;
@@ -125,7 +130,9 @@ public class MainActivity extends Activity {
             instancePrefs().edit().putBoolean(InstanceStore.ACTIVE, checked).apply();
             OverlayController.refresh(this);
         });
-        label(identityCard, "进度来源：自动选择最新的进度通知。后续可为每个实例单独指定来源。", 13, 0xff667184);
+        Button sourceButton = button(identityCard, sourceDescription(), () -> { });
+        sourceButton.setOnClickListener(v -> chooseSource(sourceButton));
+        label(identityCard, "指定应用后，只显示它的进度通知；没有进度通知时自动隐藏。", 13, 0xff667184);
         LinearLayout styleCard = section(typePage, "显示样式");
         style = spinner(styleCard, "样式", new String[]{"屏幕边缘进度条", "摄像头挖孔圆环", "环绕屏幕进度条"},
                 instancePrefs().getInt(OverlayController.STYLE, 0), OverlayController.STYLE);
@@ -512,6 +519,45 @@ public class MainActivity extends Activity {
         nav.addView(tab, lp);
         return tab;
     }
+    private String sourceDescription() {
+        return sourceDescription(instancePrefs());
+    }
+    private String sourceDescription(SharedPreferences p) {
+        if (!InstanceStore.SOURCE_APP.equals(p.getString(InstanceStore.SOURCE_TYPE, InstanceStore.SOURCE_AUTO_LATEST)))
+            return "进度来源：自动选择最新通知";
+        String pkg = p.getString(InstanceStore.SOURCE_VALUE, "");
+        try {
+            PackageManager pm = getPackageManager();
+            return "进度来源：" + pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0));
+        } catch (PackageManager.NameNotFoundException ignored) {
+            return "进度来源：" + pkg + "（应用不可用）";
+        }
+    }
+    private void chooseSource(Button target) {
+        PackageManager pm = getPackageManager();
+        Intent launcher = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
+        Map<String, String> names = new LinkedHashMap<>();
+        for (ResolveInfo info : pm.queryIntentActivities(launcher, 0)) {
+            if (info.activityInfo == null || getPackageName().equals(info.activityInfo.packageName)) continue;
+            names.put(info.activityInfo.packageName, info.loadLabel(pm).toString());
+        }
+        List<Map.Entry<String, String>> apps = new ArrayList<>(names.entrySet());
+        apps.sort((a, b) -> a.getValue().compareToIgnoreCase(b.getValue()));
+        String[] labels = new String[apps.size() + 1];
+        labels[0] = "自动选择最新通知";
+        for (int i = 0; i < apps.size(); i++) labels[i + 1] = apps.get(i).getValue() + "  ·  " + apps.get(i).getKey();
+        new AlertDialog.Builder(this).setTitle("选择进度通知来源")
+                .setItems(labels, (dialog, which) -> {
+                    SharedPreferences.Editor edit = instancePrefs().edit();
+                    if (which == 0) edit.putString(InstanceStore.SOURCE_TYPE, InstanceStore.SOURCE_AUTO_LATEST)
+                            .remove(InstanceStore.SOURCE_VALUE);
+                    else edit.putString(InstanceStore.SOURCE_TYPE, InstanceStore.SOURCE_APP)
+                            .putString(InstanceStore.SOURCE_VALUE, apps.get(which - 1).getKey());
+                    edit.apply();
+                    target.setText(sourceDescription());
+                    OverlayController.refresh(this);
+                }).show();
+    }
     private SharedPreferences instancePrefs() {
         List<String> ids = InstanceStore.ids(this);
         String id = editingId == null ? (ids.isEmpty() ? "defaults" : ids.get(0)) : editingId;
@@ -534,7 +580,7 @@ public class MainActivity extends Activity {
                 ForegroundAppService.resetCachedPackage();
                 ProgressListener.rescanActive();
             } else {
-                OverlayController.setLive(this, -1f, null);
+                OverlayController.clearLive(this);
                 OverlayController.setForegroundColors(this, null);
             }
             OverlayController.refresh(this);
@@ -554,7 +600,8 @@ public class MainActivity extends Activity {
             LinearLayout card = section(homeContent, name.isEmpty() ? "未命名实例" : name);
             int styleIndex = Math.max(0, Math.min(styles.length - 1,
                     settings.getInt(OverlayController.STYLE, 0)));
-            label(card, styles[styleIndex] + " · 自动选择最新进度通知", 14, 0xff667184);
+            label(card, styles[styleIndex] + " · " + sourceDescription(settings).replace("进度来源：", ""),
+                    14, 0xff667184);
             Switch active = new Switch(this);
             active.setText("启用这个实例");
             active.setTextSize(15);
@@ -990,7 +1037,7 @@ public class MainActivity extends Activity {
         TextView v = new TextView(this); v.setText(text); v.setTextSize(size); v.setTextColor(uiColor(color));
         v.setPadding(0, dp(10), 0, dp(10)); parent.addView(v); return v;
     }
-    private void button(LinearLayout parent, String text, Runnable action) {
+    private Button button(LinearLayout parent, String text, Runnable action) {
         Button b = new Button(this); b.setAllCaps(false); b.setText(text);
         b.setTextSize(14); b.setTextColor(uiColor(0xff1767b4));
         b.setBackground(rounded(0xffe7f0fa, 10));
@@ -999,6 +1046,7 @@ public class MainActivity extends Activity {
         lp.topMargin = dp(6);
         parent.addView(b, lp);
         b.setOnClickListener(v -> action.run());
+        return b;
     }
     private void switchSetting(LinearLayout parent, Switch control, String key, boolean defaultValue) {
         LinearLayout item = option(parent);
