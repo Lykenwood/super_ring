@@ -70,59 +70,87 @@ final class OverlayController {
     private static int windowType;
     private static boolean accessibilityOverlayFailed;
     private static ProgressView view;
-    private static float live = -1f;
-    private static IconPalette liveColors;
+    static final class LiveData {
+        final float ratio;
+        final IconPalette colors;
+        final long postTime;
+        LiveData(float ratio, IconPalette colors, long postTime) {
+            this.ratio = ratio; this.colors = colors; this.postTime = postTime;
+        }
+    }
+    private static final class LiveState {
+        float ratio = -1f;
+        IconPalette colors;
+        boolean finishing, completionLatched;
+        long finishStartedAt;
+        int generation;
+    }
+    private static final LiveState autoLive = new LiveState();
+    private static final Map<String, LiveState> appLives = new LinkedHashMap<>();
     private static IconPalette foregroundColors;
-    private static boolean finishing, completionLatched;
-    private static long finishStartedAt;
-    private static int finishGeneration;
 
     static SharedPreferences prefs(Context c) { return c.getSharedPreferences(PREFS, Context.MODE_PRIVATE); }
     static boolean isEnabled(Context c) { return prefs(c).getBoolean(ENABLED, true); }
-    static void setLive(Context c, float ratio, IconPalette colors) {
+    static void setLives(Context c, LiveData auto, Map<String, LiveData> apps) {
         Context app = c.getApplicationContext();
         MAIN.post(() -> {
-            if (ratio < 0f) {
-                if (live >= 0f && !completionLatched) startFinish(app);
-            } else if (ratio >= 1f) {
-                if (!completionLatched) {
-                    liveColors = colors;
-                    startFinish(app);
-                }
-            } else {
-                finishGeneration++;
-                finishing = false;
-                completionLatched = false;
-                live = ratio;
-                liveColors = colors;
-            }
+            applyLive(app, autoLive, auto);
+            for (String key : new java.util.ArrayList<>(appLives.keySet()))
+                if (!apps.containsKey(key)) applyLive(app, appLives.get(key), null);
+            for (Map.Entry<String, LiveData> entry : apps.entrySet())
+                applyLive(app, appLives.computeIfAbsent(entry.getKey(), key -> new LiveState()), entry.getValue());
             update(app);
         });
     }
-    private static void startFinish(Context c) {
-        finishing = true;
-        completionLatched = true;
-        finishStartedAt = SystemClock.uptimeMillis();
-        live = 1f;
-        int generation = ++finishGeneration;
+    private static void applyLive(Context c, LiveState state, LiveData data) {
+        if (data == null) {
+            if (state.ratio >= 0f && !state.completionLatched) startFinish(c, state);
+        } else if (data.ratio >= 1f) {
+            if (!state.completionLatched) {
+                state.colors = data.colors;
+                startFinish(c, state);
+            }
+        } else {
+            state.generation++;
+            state.finishing = false;
+            state.completionLatched = false;
+            state.ratio = data.ratio;
+            state.colors = data.colors;
+        }
+    }
+    private static void startFinish(Context c, LiveState state) {
+        state.finishing = true;
+        state.completionLatched = true;
+        state.finishStartedAt = SystemClock.uptimeMillis();
+        state.ratio = 1f;
+        int generation = ++state.generation;
         MAIN.postDelayed(() -> {
-            if (!finishing || generation != finishGeneration) return;
-            finishing = false;
-            live = -1f;
-            liveColors = null;
+            if (!state.finishing || generation != state.generation) return;
+            state.finishing = false;
+            state.ratio = -1f;
+            state.colors = null;
             update(c);
         }, COMPLETE_TRANSITION_MS + FINISH_FADE_MS);
     }
     static void clearLive(Context c) {
         Context app = c.getApplicationContext();
         MAIN.post(() -> {
-            finishGeneration++;
-            finishing = false;
-            completionLatched = false;
-            live = -1f;
-            liveColors = null;
+            resetLive(autoLive);
+            for (LiveState state : appLives.values()) resetLive(state);
+            appLives.clear();
             update(app);
         });
+    }
+    private static void resetLive(LiveState state) {
+        state.generation++;
+        state.finishing = false;
+        state.completionLatched = false;
+        state.ratio = -1f;
+        state.colors = null;
+    }
+    private static LiveState sourceFor(SharedPreferences p) {
+        return InstanceStore.SOURCE_APP.equals(p.getString(InstanceStore.SOURCE_TYPE, InstanceStore.SOURCE_AUTO_LATEST))
+                ? appLives.get(p.getString(InstanceStore.SOURCE_VALUE, "")) : autoLive;
     }
     static void refresh(Context c) {
         Context app = c.getApplicationContext();
@@ -144,8 +172,9 @@ final class OverlayController {
         boolean hasVisible = false;
         for (String id : InstanceStore.ids(c)) {
             SharedPreferences settings = InstanceStore.prefs(c, id);
+            LiveState source = sourceFor(settings);
             if (settings.getBoolean(InstanceStore.ACTIVE, true)
-                    && (settings.getBoolean(PREVIEW, false) || live >= 0)) {
+                    && (settings.getBoolean(PREVIEW, false) || source != null && source.ratio >= 0f)) {
                 hasVisible = true;
                 break;
             }
@@ -223,6 +252,7 @@ final class OverlayController {
         float ratio;
         private SharedPreferences settings;
         private RenderState state;
+        private LiveState activeLive;
         private final Map<String, RenderState> renderStates = new LinkedHashMap<>();
         float lineThickness;
         float instanceFade = 1f;
@@ -285,16 +315,17 @@ final class OverlayController {
                 SharedPreferences p = InstanceStore.prefs(getContext(), id);
                 if (!p.getBoolean(InstanceStore.ACTIVE, true)) continue;
                 boolean preview = p.getBoolean(PREVIEW, false);
-                if (!preview && live < 0) continue;
+                activeLive = sourceFor(p);
+                if (!preview && (activeLive == null || activeLive.ratio < 0f)) continue;
                 settings = p;
                 state = renderStates.computeIfAbsent(id, key -> new RenderState());
                 if (preview) {
                     state.progressInitialized = false;
                     ratio = 1f;
-                } else ratio = transitionProgress(Math.max(0f, Math.min(1f, live)));
+                } else ratio = transitionProgress(Math.max(0f, Math.min(1f, activeLive.ratio)));
                 int fadeAlpha = 255;
-                if (!preview && finishing) {
-                    long fadeElapsed = SystemClock.uptimeMillis() - finishStartedAt - COMPLETE_TRANSITION_MS;
+                if (!preview && activeLive.finishing) {
+                    long fadeElapsed = SystemClock.uptimeMillis() - activeLive.finishStartedAt - COMPLETE_TRANSITION_MS;
                     if (fadeElapsed > 0) fadeAlpha = Math.max(0, 255 - Math.round(255f * fadeElapsed / FINISH_FADE_MS));
                     if (fadeAlpha > 0) postInvalidateOnAnimation();
                 }
@@ -323,7 +354,7 @@ final class OverlayController {
                     state.progressTransitionActive = false;
                 } else {
                     state.startingProgress = state.displayedProgress;
-                    state.progressTransitionStart = finishing && target >= 1f ? finishStartedAt : now;
+                    state.progressTransitionStart = activeLive.finishing && target >= 1f ? activeLive.finishStartedAt : now;
                     state.progressTransitionDurationMs = target >= 1f
                             ? COMPLETE_TRANSITION_MS : PROGRESS_TRANSITION_MS;
                     state.progressTransitionActive = true;
@@ -353,7 +384,7 @@ final class OverlayController {
             int color = withAlpha(savedColor, opacity);
             IconPalette palette = null;
             if (p.getBoolean(FOREGROUND_COLOR, false)) palette = foregroundColors;
-            else if (p.getBoolean(AUTO_COLOR, false)) palette = liveColors;
+            else if (p.getBoolean(AUTO_COLOR, false) && activeLive != null) palette = activeLive.colors;
             if ((p.getBoolean(FOREGROUND_COLOR, false) || p.getBoolean(AUTO_COLOR, false)) && palette == null)
                 palette = IconPalette.sample();
             int mode = p.getInt(COLOR_MODE, 0);
@@ -464,8 +495,8 @@ final class OverlayController {
             }
         }
         private long sparkleAge() {
-            if (!finishing || ratio < 1f || !ValueAnimator.areAnimatorsEnabled()) return -1;
-            long age = SystemClock.uptimeMillis() - finishStartedAt - COMPLETE_TRANSITION_MS;
+            if (activeLive == null || !activeLive.finishing || ratio < 1f || !ValueAnimator.areAnimatorsEnabled()) return -1;
+            long age = SystemClock.uptimeMillis() - activeLive.finishStartedAt - COMPLETE_TRANSITION_MS;
             return age >= 0 && age < 1300 ? age : -1;
         }
         private void drawRingSparkles(Canvas canvas, float cx, float cy, float radius, int[] colors) {
