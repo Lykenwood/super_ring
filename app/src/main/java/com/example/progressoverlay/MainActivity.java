@@ -429,15 +429,16 @@ public class MainActivity extends Activity {
         settingsTab = tab(nav, "首页", () -> showPage(0));
         myTab = tab(nav, "我的", () -> showPage(2));
         shell.addView(nav, new LinearLayout.LayoutParams(-1, dp(64)));
+        if (Build.VERSION.SDK_INT >= 30) {
+            getWindow().setDecorFitsSystemWindows(false);
+            shell.setOnApplyWindowInsetsListener((view, insets) -> {
+                android.graphics.Insets safe = insets.getInsets(
+                        WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                view.setPadding(safe.left, safe.top, safe.right, safe.bottom);
+                return insets;
+            });
+        }
         setContentView(shell);
-        editorHeader.post(() -> {
-            WindowInsets insets = editorHeader.getRootWindowInsets();
-            if (insets == null) return;
-            int top = Build.VERSION.SDK_INT >= 30
-                    ? insets.getInsets(WindowInsets.Type.statusBars()).top
-                    : insets.getSystemWindowInsetTop();
-            editorHeader.setPadding(dp(16), dp(8) + top, dp(16), dp(8));
-        });
         showEditorTab(state == null ? 0 : state.getInt("editor_tab", 0));
         refreshHome();
         showPage(state == null ? getIntent().getIntExtra("open_page", editingId == null ? 0 : 1)
