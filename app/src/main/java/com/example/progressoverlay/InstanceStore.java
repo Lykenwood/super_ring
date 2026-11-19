@@ -15,6 +15,7 @@ final class InstanceStore {
     static final String SOURCE_TYPE = "source_type";
     static final String SOURCE_VALUE = "source_value";
     static final String SOURCE_AUTO_LATEST = "auto_latest";
+    static final String SOURCE_APP = "app";
     private static final String IDS = "instance_ids";
     private static final String MIGRATED = "instances_migrated";
 
